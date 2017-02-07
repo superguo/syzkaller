@@ -48,6 +48,8 @@ type Config struct {
 	Sshkey      string
 	Executor    string
 	Device      string
+	Avd         string
+	AvdArgs     string
 	MachineType string
 	Cpu         int
 	Mem         int

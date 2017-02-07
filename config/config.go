@@ -43,6 +43,8 @@ type Config struct {
 	Type      string   // VM type (qemu, kvm, local)
 	Count     int      // number of VMs (don't secify for adb, instead specify devices)
 	Devices   []string // device IDs for adb
+	Avd       string   // Android virtual device name for emulator -avd argument (without "@")
+	Avd_Args  string   // Additional Android  emulatorarguments (before -qemu after -avd $Avd)
 	Procs     int      // number of parallel processes inside of every VM
 
 	Sandbox string // type of sandbox to use during fuzzing:
@@ -128,6 +130,10 @@ func parse(data []byte) (*Config, map[int]bool, error) {
 			return nil, nil, fmt.Errorf("specify at least 1 adb device")
 		}
 		cfg.Count = len(cfg.Devices)
+	case "adbemu":
+		if cfg.Avd == "" {
+			return nil, nil, fmt.Errorf("config param avd is empty (required for type \"adbemu\")")
+		}
 	case "gce":
 		if cfg.Machine_Type == "" {
 			return nil, nil, fmt.Errorf("machine_type parameter is empty (required for gce)")
@@ -278,6 +284,8 @@ func CreateVMConfig(cfg *Config, index int) (*vm.Config, error) {
 		Initrd:      cfg.Initrd,
 		Sshkey:      cfg.Sshkey,
 		Executor:    filepath.Join(cfg.Syzkaller, "bin", "syz-executor"),
+		Avd:         cfg.Avd,
+                AvdArgs:     cfg.Avd_Args,
 		Cpu:         cfg.Cpu,
 		Mem:         cfg.Mem,
 		Debug:       cfg.Debug,
@@ -315,6 +323,8 @@ func checkUnknownFields(data []byte) (string, error) {
 		"Type",
 		"Count",
 		"Devices",
+		"Avd",
+		"Avd_Args",
 		"Procs",
 		"Cover",
 		"Sandbox",
