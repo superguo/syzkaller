@@ -39,6 +39,7 @@ type instance struct {
 
 	// Android stuffs
 	device  string
+	sdkPath string
 }
 
 func ctor(cfg *vm.Config) (vm.Instance, error) {
@@ -64,7 +65,8 @@ func ctorImpl(cfg *vm.Config) (vm.Instance, error) {
 		}
 	}()
 
-	if err := validateConfig(cfg); err != nil {
+	inst.sdkPath = os.Getenv("ANDROID_SDK")
+	if err := validateConfig(cfg, inst.sdkPath); err != nil {
 		return nil, err
 	}
 
@@ -106,8 +108,7 @@ func containsAvd(emulatorPath string, avd string) bool {
 	return false
 }
 
-func validateConfig(cfg *vm.Config) error {
-	sdkPath := os.Getenv("ANDROID_SDK")
+func validateConfig(cfg *vm.Config, sdkPath string) error {
 	if cfg.Bin == "" {
 		if sdkPath == "" {
 			return fmt.Errorf("ANDROID_SDK must be set")
@@ -175,6 +176,7 @@ func (inst *instance) Boot() error {
 		// This is reasonable defaults for Android emulator.
 		args = append(args,
 			"-verbose",
+			"-wipe-data",
 			"-show-kernel",
 			"-no-window",
 		)
@@ -305,7 +307,8 @@ func (inst *instance) adb(args ...string) ([]byte, error) {
     }
     defer wpipe.Close()
     defer rpipe.Close()
-    cmd := exec.Command("adb", args...)
+    adbPath := inst.sdkPath + "/platform-tools/adb"
+    cmd := exec.Command(adbPath, args...)
     cmd.Stdout = wpipe
     cmd.Stderr = wpipe
     if err := cmd.Start(); err != nil {

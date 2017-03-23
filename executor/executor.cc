@@ -25,6 +25,7 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+#include <err.h>
 
 #include "syscalls.h"
 
@@ -210,8 +211,10 @@ void loop()
 		// Create a new private work dir for this test (removed at the end of the loop).
 		char cwdbuf[256];
 		sprintf(cwdbuf, "./%d", iter);
-		if (mkdir(cwdbuf, 0777))
-			fail("failed to mkdir");
+		if (mkdir(cwdbuf, 0777)) {
+			warn("failed to mkdir '%s'", cwdbuf);
+			continue;
+		}
 
 		if (read(kInPipeFd, &tmp, 1) != 1)
 			fail("control pipe read failed");
