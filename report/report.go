@@ -81,7 +81,7 @@ var oopses = []*oops{
 		},
 		[]*regexp.Regexp{},
 	},
-	&oops{
+/*	&oops{
 		[]byte("WARNING:"),
 		[]oopsFormat{
 			{
@@ -93,7 +93,7 @@ var oopses = []*oops{
 			compile("WARNING: /etc/ssh/moduli does not exist, using fixed modulus"), // printed by sshd
 		},
 	},
-	&oops{
+*/	&oops{
 		[]byte("INFO:"),
 		[]oopsFormat{
 			{
