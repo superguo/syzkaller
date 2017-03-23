@@ -7,12 +7,18 @@
 
 if [ "$LINUX" == "" ]; then
 	if [ "$ANDROID" == "" ]; then
-		echo "usage: make extract LINUX=/linux/checkout]"
-		echo "OR: make extract ANDROID=/linux/checkout]"
+		echo "usage: make extract LINUX=/linux/checkout"
+		echo "OR: make extract ANDROID=/linux/checkout"
+		echo "OR: make extract ANDROID=/linux/checkout EMULATOR=yes"
 		exit 1
 	else
 		LINUX=$ANDROID
 		BUILD_FOR_ANDROID=yes
+		if [ "$EMULATOR" == "yes" ]; then
+			BUILD_FOR_ANDROID_EMULATOR=yes
+		else
+			BUILD_FOR_ANDROID_EMULATOR=no
+		fi
 	fi
 else
 	BUILD_FOR_ANDROID=no
@@ -26,9 +32,16 @@ COMMON_FILES="sys/socket.txt sys/tty.txt sys/perf.txt sys/kvm.txt \
 
 UPSTREAM_FILES="sys/sys.txt sys/kcm.txt"
 ANDROID_FILES=sys/tlk_device.txt
+ANDROID_EMULATOR_FILES="sys/socket.txt sys/binder.txt sys/tty.txt sys/kvm.txt \
+	sys/key.txt sys/bpf.txt sys/fuse.txt sys/dri.txt sys/kdbus.txt sys/sctp.txt \
+	sys/sndseq.txt sys/sndtimer.txt sys/sndcontrol.txt sys/input.txt \
+	sys/netlink.txt sys/tun.txt sys/random.txt sys/netrom.txt \
+	sys/vnet.txt"
 
 if [ "$BUILD_FOR_ANDROID" == "no" ]; then
 	FILES="$COMMON_FILES $UPSTREAM_FILES"
+elif [ "$BUILD_FOR_ANDROID_EMULATOR" == "yes" ]; then
+	FILES="$ANDROID_EMULATOR_FILES"
 else
 	FILES="$ANDROID_FILES"
 fi
@@ -36,13 +49,18 @@ fi
 generate_arch() {
 	echo generating arch $1...
 	echo "cd $LINUX; make defconfig"
-	OUT=`(cd $LINUX; make ARCH=$2 CROSS_COMPILE=$3-linux-gnu- defconfig 2>&1)`
+	if [ "$BUILD_FOR_ANDROID" == "yes" ]; then
+		CROSS_COMPILE=$3-linux-android-
+	else
+		CROSS_COMPILE=$3-linux-gnu-
+	fi
+	OUT=`(cd $LINUX; make ARCH=$2 CROSS_COMPILE=$CROSS_COMPILE defconfig 2>&1)`
 	if [ $? -ne 0 ]; then
 		echo "$OUT"
 		exit 1
 	fi
 	echo "cd $LINUX; make"
-	OUT=`(cd $LINUX; make ARCH=$2 CROSS_COMPILE=$3-linux-gnu- init/main.o 2>&1)`
+	OUT=`(cd $LINUX; make ARCH=$2 CROSS_COMPILE=$CROSS_COMPILE init/main.o 2>&1)`
 	if [ $? -ne 0 ]; then
 		echo "$OUT"
 		exit 1
@@ -56,6 +74,7 @@ generate_arch() {
 	done
 	echo
 }
+
 
 generate_arch amd64 x86_64 x86_64
 generate_arch arm64 arm64 aarch64

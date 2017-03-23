@@ -1,0 +1,36 @@
+# Copyright 2016 syzkaller project authors. All rights reserved.
+# Use of this source code is governed by Apache 2 LICENSE that can be found in the LICENSE file.
+
+# Binder driver for /dev/binder
+# Reference source code:
+# https://android.googlesource.com/kernel/goldfish/+/android-3.18/drivers/staging/android/uapi/binder.h
+
+include <linux/ioctl.h>
+include <linux/types.h>
+include <drivers/staging/android/uapi/binder.h>
+
+resource fd_binder[fd]
+syz_open_dev$binder(dev ptr[in, string["/dev/binder"]], id const[0], flags flags[open_flags]) fd_binder
+
+ioctl$BINDER_VERSION(fd fd_binder, cmd const[BINDER_VERSION], arg ptr[out, binder_version])
+ioctl$BINDER_WRITE_READ(fd fd_binder, cmd const[BINDER_WRITE_READ], arg ptr[inout, binder_write_read])
+ioctl$BINDER_SET_IDLE_TIMEOUT(fd fd_binder, cmd const[BINDER_SET_IDLE_TIMEOUT], arg ptr[in, int64])
+ioctl$BINDER_SET_MAX_THREADS(fd fd_binder, cmd const[BINDER_SET_MAX_THREADS], arg ptr[in, int32])
+ioctl$BINDER_SET_IDLE_PRIORITY(fd fd_binder, cmd const[BINDER_SET_IDLE_PRIORITY], arg ptr[in, int32])
+ioctl$BINDER_SET_CONTEXT_MGR(fd fd_binder, cmd const[BINDER_SET_CONTEXT_MGR],  arg ptr[in, int32])
+ioctl$BINDER_THREAD_EXIT(fd fd_binder, cmd const[BINDER_THREAD_EXIT],  arg ptr[in, int32])
+
+
+binder_version {
+	protocol_version int32
+}
+
+binder_write_read {
+	write_size len[write_buffer, intptr]
+	write_consumed int64
+	write_buffer buffer[in]
+	read_size len[read_buffer, intptr]
+	read_consumed int64
+	read_buffer buffer[out]
+}
+
