@@ -36,7 +36,7 @@ ANDROID_EMULATOR_FILES="sys/socket.txt sys/binder.txt sys/tty.txt sys/kvm.txt \
 	sys/key.txt sys/bpf.txt sys/fuse.txt sys/dri.txt sys/kdbus.txt sys/sctp.txt \
 	sys/sndseq.txt sys/sndtimer.txt sys/sndcontrol.txt sys/input.txt \
 	sys/netlink.txt sys/tun.txt sys/random.txt sys/netrom.txt \
-	sys/vnet.txt"
+	sys/vnet.txt sys/ion.txt"
 
 if [ "$BUILD_FOR_ANDROID" == "no" ]; then
 	FILES="$COMMON_FILES $UPSTREAM_FILES"

@@ -1,0 +1,45 @@
+# Copyright 2016 syzkaller project authors. All rights reserved.
+# Use of this source code is governed by Apache 2 LICENSE that can be found in the LICENSE file.
+
+# Binder driver for /dev/binder
+# Reference source code:
+# https://android.googlesource.com/kernel/goldfish/+/android-3.18/drivers/staging/android/uapi/ion.h
+
+include <linux/ioctl.h>
+include <linux/types.h>
+include <drivers/staging/android/uapi/ion.h>
+
+resource fd_ion[fd]
+syz_open_dev$ion(dev ptr[in, string["/dev/ion"]], id const[0], flags flags[open_flags]) fd_ion
+
+ioctl$ION_IOC_ALLOC(fd fd_ion, cmd const[ION_IOC_ALLOC], arg ptr[out, ion_allocation_data])
+ioctl$ION_IOC_FREE(fd fd_ion, cmd const[ION_IOC_FREE], arg ptr[in, ion_allocation_data])
+ioctl$ION_IOC_MAP(fd fd_ion, cmd const[ION_IOC_MAP], arg ptr[inout, ion_fd_data])
+ioctl$ION_IOC_SHARE(fd fd_ion, cmd const[ION_IOC_SHARE], arg ptr[inout, ion_fd_data])
+ioctl$ION_IOC_IMPORT(fd fd_ion, cmd const[ION_IOC_IMPORT], arg ptr[inout, ion_fd_data])
+ioctl$ION_IOC_SYNC(fd fd_ion, cmd const[ION_IOC_SYNC], arg ptr[in, ion_fd_data])
+
+ion_user_handle_t {
+	handle int32
+}
+
+ion_allocation_data {
+        len int64
+        align int64
+        heap_id_mask flags[ion_heap_masks, int32]
+        flags flags[ion_flags, int32]
+        handle ion_user_handle_t
+}
+
+ion_fd_data {
+	handle ion_user_handle_t
+        fd fd
+}
+
+ion_handle_data {
+        handle ion_user_handle_t 
+}
+
+ion_flags = ION_FLAG_CACHED, ION_FLAG_CACHED_NEEDS_SYNC
+ion_heap_masks = ION_HEAP_SYSTEM_MASK, ION_HEAP_SYSTEM_CONTIG_MASK, ION_HEAP_CARVEOUT_MASK, ION_HEAP_TYPE_DMA_MASK
+
