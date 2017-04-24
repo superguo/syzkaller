@@ -32,11 +32,11 @@ COMMON_FILES="sys/socket.txt sys/tty.txt sys/perf.txt sys/kvm.txt \
 
 UPSTREAM_FILES="sys/sys.txt sys/kcm.txt"
 ANDROID_FILES=sys/tlk_device.txt
-ANDROID_EMULATOR_FILES="sys/socket.txt sys/binder.txt sys/tty.txt sys/kvm.txt \
-	sys/key.txt sys/bpf.txt sys/fuse.txt sys/dri.txt sys/kdbus.txt sys/sctp.txt \
-	sys/sndseq.txt sys/sndtimer.txt sys/sndcontrol.txt sys/input.txt \
-	sys/netlink.txt sys/tun.txt sys/random.txt sys/netrom.txt \
-	sys/vnet.txt sys/ion.txt"
+ANDROID_EMULATOR_FILES="sys/binder.txt sys/tty.txt \
+	sys/key.txt sys/fuse.txt \
+	sys/input.txt \
+	sys/random.txt \
+	sys/ion.txt"
 
 if [ "$BUILD_FOR_ANDROID" == "no" ]; then
 	FILES="$COMMON_FILES $UPSTREAM_FILES"
@@ -46,15 +46,17 @@ else
 	FILES="$ANDROID_FILES"
 fi
 
+CONFIG:=defconfig
+
 generate_arch() {
 	echo generating arch $1...
-	echo "cd $LINUX; make defconfig"
+	echo "cd $LINUX; make $CONFIG"
 	if [ "$BUILD_FOR_ANDROID" == "yes" ]; then
 		CROSS_COMPILE=$3-linux-android-
 	else
 		CROSS_COMPILE=$3-linux-gnu-
 	fi
-	OUT=`(cd $LINUX; make ARCH=$2 CROSS_COMPILE=$CROSS_COMPILE defconfig 2>&1)`
+	OUT=`(cd $LINUX; make ARCH=$2 CROSS_COMPILE=$CROSS_COMPILE $CONFIG 2>&1)`
 	if [ $? -ne 0 ]; then
 		echo "$OUT"
 		exit 1
@@ -77,7 +79,8 @@ generate_arch() {
 
 
 generate_arch amd64 x86_64 x86_64
-generate_arch arm64 arm64 aarch64
 if [ "$BUILD_FOR_ANDROID" == "no" ]; then
 	generate_arch ppc64le powerpc powerpc64le
+	generate_arch arm64 arm64 aarch64
 fi
+

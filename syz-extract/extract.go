@@ -32,8 +32,6 @@ type Arch struct {
 
 var archs = map[string]*Arch{
 	"amd64":   {[]string{"__x86_64__"}, "x86", "asm/unistd.h", []string{"-m64"}},
-	"arm64":   {[]string{"__aarch64__"}, "arm64", "asm/unistd.h", []string{}},
-	"ppc64le": {[]string{"__ppc64__", "__PPC64__", "__powerpc64__"}, "powerpc", "asm/unistd.h", []string{"-D__powerpc64__"}},
 }
 
 func main() {
