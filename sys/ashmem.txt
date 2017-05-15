@@ -1,0 +1,39 @@
+# Copyright 2016 syzkaller project authors. All rights reserved.
+# Use of this source code is governed by Apache 2 LICENSE that can be found in the LICENSE file.
+
+# Binder driver for /dev/ashmem
+# Reference source code:
+# https://android.googlesource.com/kernel/goldfish/+/android-3.18/drivers/staging/android/uapi/ashmem.h
+
+include <linux/ioctl.h>
+include <linux/types.h>
+include <drivers/staging/android/uapi/ashmem.h>
+
+resource fd_ashmem[fd]
+syz_open_dev$ashmem(dev ptr[in, string["/dev/ashmem"]], id const[0], flags flags[open_flags]) fd_ashmem
+
+ioctl$ASHMEM_SET_NAME(fd fd_ashmem, cmd const[ASHMEM_SET_NAME], arg ptr[in, string])
+ioctl$ASHMEM_GET_NAME(fd fd_ashmem, cmd const[ASHMEM_GET_NAME], arg ptr[out, string])
+ioctl$ASHMEM_SET_SIZE(fd fd_ashmem, cmd const[ASHMEM_SET_SIZE], arg ptr[in, int32])
+ioctl$ASHMEM_GET_SIZE(fd fd_ashmem, cmd const[ASHMEM_GET_SIZE], arg ptr[out, int32])
+ioctl$ASHMEM_SET_PROT_MASK(fd fd_ashmem, cmd const[ASHMEM_SET_PROT_MASK], arg ptr[in, ashmem_flags])
+ioctl$ASHMEM_GET_PROT_MASK(fd fd_ashmem, cmd const[ASHMEM_GET_PROT_MASK], arg ptr[out, int32])
+ioctl$ASHMEM_PIN(fd fd_ashmem, cmd const[ASHMEM_PIN], arg ptr[in, ashmem_pin])
+ioctl$ASHMEM_UNPIN(fd fd_ashmem, cmd const[ASHMEM_UNPIN], arg ptr[in, ashmem_pin])
+ioctl$ASHMEM_GET_PIN_STATUS(fd fd_ashmem, cmd const[ASHMEM_GET_PIN_STATUS], arg ptr[out, int32])
+ioctl$ASHMEM_PURGE_ALL_CACHES(fd fd_ashmem, cmd const[ASHMEM_PURGE_ALL_CACHES], arg ptr[out, int32])
+mmap$fd_ashmem(addr const[0], len len[addr], flags flags[mmap_flags], fd fd_ashmem, offset const[0]) vma
+munmap$fd_ashmem(addr vma, len len[addr])
+read$fd_ashmem(fd fd_ashmem, val ptr[out, int64], len len[val])
+write$fd_ashmem(fd fd_ashmem, val ptr[in, int64], len len[val])
+
+ashmem_flags{
+    flags flags[mmap_prot, int32]
+}
+
+ashmem_pin {
+    offset int32
+    len int32
+}
+
+
