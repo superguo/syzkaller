@@ -22,7 +22,7 @@ ioctl$ASHMEM_PIN(fd fd_ashmem, cmd const[ASHMEM_PIN], arg ptr[in, ashmem_pin])
 ioctl$ASHMEM_UNPIN(fd fd_ashmem, cmd const[ASHMEM_UNPIN], arg ptr[in, ashmem_pin])
 ioctl$ASHMEM_GET_PIN_STATUS(fd fd_ashmem, cmd const[ASHMEM_GET_PIN_STATUS], arg ptr[out, int32])
 ioctl$ASHMEM_PURGE_ALL_CACHES(fd fd_ashmem, cmd const[ASHMEM_PURGE_ALL_CACHES], arg ptr[out, int32])
-mmap$fd_ashmem(addr const[0], len len[addr], flags flags[mmap_flags], fd fd_ashmem, offset const[0]) vma
+mmap$fd_ashmem(addr vma, len len[addr], prot flags[mmap_prot], flags flags[mmap_flags], fd fd_ashmem, offset const[0]) vma
 munmap$fd_ashmem(addr vma, len len[addr])
 read$fd_ashmem(fd fd_ashmem, val ptr[out, int64], len len[val])
 write$fd_ashmem(fd fd_ashmem, val ptr[in, int64], len len[val])
@@ -35,5 +35,4 @@ ashmem_pin {
     offset int32
     len int32
 }
-
 
