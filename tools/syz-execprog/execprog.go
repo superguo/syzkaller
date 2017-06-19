@@ -60,9 +60,22 @@ func main() {
 	if err != nil {
 		Fatalf("%v", err)
 	}
+	needCover := flags&ipc.FlagSignal != 0
+	dedupCover := true
 	if *flagCoverFile != "" {
-		flags |= ipc.FlagCover
-		flags &= ^ipc.FlagDedupCover
+		flags |= ipc.FlagSignal
+		needCover = true
+		dedupCover = false
+	}
+
+	handled := make(map[string]bool)
+	for _, prog := range progs {
+		for _, call := range prog.Calls {
+			handled[call.Meta.CallName] = true
+		}
+	}
+	if handled["syz_emit_ethernet"] {
+		flags |= ipc.FlagEnableTun
 	}
 
 	var wg sync.WaitGroup
@@ -106,7 +119,7 @@ func main() {
 						Logf(0, "executing program %v:\n%s", pid, data)
 						logMu.Unlock()
 					}
-					output, cov, _, failed, hanged, err := env.Exec(p)
+					output, info, failed, hanged, err := env.Exec(p, needCover, dedupCover)
 					if atomic.LoadUint32(&shutdown) != 0 {
 						return false
 					}
@@ -120,14 +133,14 @@ func main() {
 						// Coverage is dumped in sanitizer format.
 						// github.com/google/sanitizers/tools/sancov command can be used to dump PCs,
 						// then they can be piped via addr2line to symbolize.
-						for i, c := range cov {
-							fmt.Printf("call #%v: coverage %v\n", i, len(c))
-							if len(c) == 0 {
+						for i, inf := range info {
+							fmt.Printf("call #%v: signal %v, coverage %v\n", i, len(inf.Signal), len(inf.Cover))
+							if len(inf.Cover) == 0 {
 								continue
 							}
 							buf := new(bytes.Buffer)
 							binary.Write(buf, binary.LittleEndian, uint64(0xC0BFFFFFFFFFFF64))
-							for _, pc := range c {
+							for _, pc := range inf.Cover {
 								binary.Write(buf, binary.LittleEndian, cover.RestorePC(pc, 0xffffffff))
 							}
 							err := ioutil.WriteFile(fmt.Sprintf("%v.%v", *flagCoverFile, i), buf.Bytes(), 0660)

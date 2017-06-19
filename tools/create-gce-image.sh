@@ -9,7 +9,7 @@
 # - you need a user-space system, a basic Debian system can be created with:
 #   sudo debootstrap --include=openssh-server,curl,tar,time,strace stable debian
 # - you need qemu-nbd, grub and maybe something else:
-#   sudo apt-get install qemu-utils grub
+#   sudo apt-get install qemu-utils grub-efi
 # - you need nbd support in kernel
 # - you need kernel to use with image (e.g. arch/x86/boot/bzImage)
 #   note: kernel modules are not supported
@@ -46,10 +46,10 @@ if [ "$(basename $3)" != "vmlinux" ]; then
 	exit 1
 fi
 
-if [ "$(grep nbd0 /proc/partitions)" != "" ]; then
-	echo "/dev/nbd0 is already in use, try sudo qemu-nbd -d /dev/nbd0"
-	exit 1
-fi
+# Clean up after previous unsuccessful run.
+sudo umount disk.mnt || true
+sudo qemu-nbd -d /dev/nbd0 || true
+rm -rf disk.mnt disk.raw tag obj || true
 
 sudo modprobe nbd
 fallocate -l 2G disk.raw
@@ -65,9 +65,11 @@ sudo sed -i "/^root/ { s/:x:/::/ }" disk.mnt/etc/passwd
 echo "T0:23:respawn:/sbin/getty -L ttyS0 115200 vt100" | sudo tee -a disk.mnt/etc/inittab
 echo -en "\nauto eth0\niface eth0 inet dhcp\n" | sudo tee -a disk.mnt/etc/network/interfaces
 echo "debugfs /sys/kernel/debug debugfs defaults 0 0" | sudo tee -a disk.mnt/etc/fstab
+echo "kernel.printk = 7 4 1 3" | sudo tee -a disk.mnt/etc/sysctl.conf
 echo "debug.exception-trace = 0" | sudo tee -a disk.mnt/etc/sysctl.conf
 echo "net.core.bpf_jit_enable = 1" | sudo tee -a disk.mnt/etc/sysctl.conf
 echo "net.core.bpf_jit_harden = 2" | sudo tee -a disk.mnt/etc/sysctl.conf
+echo "net.ipv4.ping_group_range = 0 65535" | sudo tee -a disk.mnt/etc/sysctl.conf
 echo -en "127.0.0.1\tlocalhost\n" | sudo tee disk.mnt/etc/hosts
 echo "nameserver 8.8.8.8" | sudo tee -a disk.mnt/etc/resolve.conf
 echo "ClientAliveInterval 420" | sudo tee -a disk.mnt/etc/ssh/sshd_config
@@ -95,7 +97,7 @@ menuentry 'linux' --class gnu-linux --class gnu --class os {
 	insmod part_msdos
 	insmod ext2
 	set root='(hd0,1)'
-	linux /vmlinuz root=/dev/sda1 console=ttyS0 earlyprintk=serial vsyscall=native rodata=n ftrace_dump_on_oops=orig_cpu oops=panic panic_on_warn=1 panic=86400
+	linux /vmlinuz root=/dev/sda1 console=ttyS0 earlyprintk=serial vsyscall=native rodata=n ftrace_dump_on_oops=orig_cpu oops=panic panic_on_warn=1 panic=86400 kvm-intel.nested=1 kvm-intel.unrestricted_guest=1 kvm-intel.vmm_exclusive=1 kvm-intel.fasteoi=1 kvm-intel.ept=1 kvm-intel.flexpriority=1 kvm-intel.vpid=1 kvm-intel.emulate_invalid_guest_state=1 kvm-intel.eptad=1 kvm-intel.enable_shadow_vmcs=1 kvm-intel.pml=1 kvm-intel.enable_apicv=1
 }
 EOF
 sudo grub-install --boot-directory=disk.mnt/boot --no-floppy /dev/nbd0

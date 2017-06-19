@@ -1,6 +1,8 @@
 // Copyright 2015 syzkaller project authors. All rights reserved.
 // Use of this source code is governed by Apache 2 LICENSE that can be found in the LICENSE file.
 
+// +build
+
 #include <algorithm>
 #include <errno.h>
 #include <fcntl.h>
@@ -45,8 +47,9 @@ const int kMaxInput = 2 << 20;
 const int kMaxOutput = 16 << 20;
 const int kMaxArgs = 9;
 const int kMaxThreads = 16;
-const int kMaxCommands = 4 << 10;
-const int kCoverSize = 16 << 10;
+const int kMaxCommands = 16 << 10;
+const int kCoverSize = 64 << 10;
+const int kPageSize = 4 << 10;
 
 const uint64_t instr_eof = -1;
 const uint64_t instr_copyin = -2;
@@ -70,15 +73,17 @@ enum sandbox_type {
 bool flag_cover;
 bool flag_threaded;
 bool flag_collide;
-bool flag_deduplicate;
 bool flag_sandbox_privs;
 sandbox_type flag_sandbox;
 bool flag_enable_tun;
 
+bool flag_collect_cover;
+bool flag_dedup_cover;
+
 __attribute__((aligned(64 << 10))) char input_data[kMaxInput];
-__attribute__((aligned(64 << 10))) char output_data[kMaxOutput];
+uint32_t* output_data;
 uint32_t* output_pos;
-int completed;
+uint32_t completed;
 int running;
 bool collide;
 
@@ -115,8 +120,8 @@ void execute_one();
 uint64_t read_input(uint64_t** input_posp, bool peek = false);
 uint64_t read_arg(uint64_t** input_posp);
 uint64_t read_result(uint64_t** input_posp);
-void write_output(uint32_t v);
-void copyin(char* addr, uint64_t val, uint64_t size);
+uint32_t* write_output(uint32_t v);
+void copyin(char* addr, uint64_t val, uint64_t size, uint64_t bf_off, uint64_t bf_len);
 uint64_t copyout(char* addr, uint64_t size);
 thread_t* schedule_call(int n, int call_index, int call_num, uint64_t num_args, uint64_t* args, uint64_t* pos);
 void execute_call(thread_t* th);
@@ -128,19 +133,21 @@ void cover_open();
 void cover_enable(thread_t* th);
 void cover_reset(thread_t* th);
 uint64_t cover_read(thread_t* th);
-uint64_t cover_dedup(thread_t* th, uint64_t n);
+static uint32_t hash(uint32_t a);
+static bool dedup(uint32_t sig);
 
 int main(int argc, char** argv)
 {
-	if (argc == 2 && strcmp(argv[1], "reboot") == 0) {
-		reboot(LINUX_REBOOT_CMD_RESTART);
-		return 0;
-	}
-
 	prctl(PR_SET_PDEATHSIG, SIGKILL, 0, 0, 0);
-	if (mmap(&input_data[0], kMaxInput, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_FIXED, kInFd, 0) != &input_data[0])
+	if (mmap(&input_data[0], kMaxInput, PROT_READ, MAP_PRIVATE | MAP_FIXED, kInFd, 0) != &input_data[0])
 		fail("mmap of input file failed");
-	if (mmap(&output_data[0], kMaxOutput, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, kOutFd, 0) != &output_data[0])
+	// The output region is the only thing in executor process for which consistency matters.
+	// If it is corrupted ipc package will fail to parse its contents and panic.
+	// But fuzzer constantly invents new ways of how to currupt the region,
+	// so we map the region at a (hopefully) hard to guess address surrounded by unmapped pages.
+	void* const kOutputDataAddr = (void*)0x1ddbc20000;
+	output_data = (uint32_t*)mmap(kOutputDataAddr, kMaxOutput, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, kOutFd, 0);
+	if (output_data != kOutputDataAddr)
 		fail("mmap of output file failed");
 	// Prevent random programs to mess with these fds.
 	// Due to races in collider mode, a program can e.g. ftruncate one of these fds,
@@ -154,30 +161,29 @@ int main(int argc, char** argv)
 	flag_cover = flags & (1 << 1);
 	flag_threaded = flags & (1 << 2);
 	flag_collide = flags & (1 << 3);
-	flag_deduplicate = flags & (1 << 4);
 	flag_sandbox = sandbox_none;
-	if (flags & (1 << 5))
+	if (flags & (1 << 4))
 		flag_sandbox = sandbox_setuid;
-	else if (flags & (1 << 6))
+	else if (flags & (1 << 5))
 		flag_sandbox = sandbox_namespace;
 	if (!flag_threaded)
 		flag_collide = false;
-	flag_enable_tun = flags & (1 << 7);
+	flag_enable_tun = flags & (1 << 6);
 	uint64_t executor_pid = *((uint64_t*)input_data + 1);
 
 	cover_open();
-	setup_main_process(executor_pid, flag_enable_tun);
+	setup_main_process();
 
 	int pid = -1;
 	switch (flag_sandbox) {
 	case sandbox_none:
-		pid = do_sandbox_none();
+		pid = do_sandbox_none(executor_pid, flag_enable_tun);
 		break;
 	case sandbox_setuid:
-		pid = do_sandbox_setuid();
+		pid = do_sandbox_setuid(executor_pid, flag_enable_tun);
 		break;
 	case sandbox_namespace:
-		pid = do_sandbox_namespace();
+		pid = do_sandbox_namespace(executor_pid, flag_enable_tun);
 		break;
 	default:
 		fail("unknown sandbox type");
@@ -203,7 +209,7 @@ int main(int argc, char** argv)
 void loop()
 {
 	// Tell parent that we are ready to serve.
-	char tmp;
+	char tmp = 0;
 	if (write(kOutPipeFd, &tmp, 1) != 1)
 		fail("control pipe write failed");
 
@@ -216,8 +222,14 @@ void loop()
 			continue;
 		}
 
-		if (read(kInPipeFd, &tmp, 1) != 1)
+		// TODO: consider moving the read into the child.
+		// Potentially it can speed up things a bit -- when the read finishes
+		// we already have a forked worker process.
+		char flags = 0;
+		if (read(kInPipeFd, &flags, 1) != 1)
 			fail("control pipe read failed");
+		flag_collect_cover = flags & (1 << 0);
+		flag_dedup_cover = flags & (1 << 1);
 
 		int pid = fork();
 		if (pid < 0)
@@ -242,6 +254,8 @@ void loop()
 		// should be as efficient as sigtimedwait.
 		int status = 0;
 		uint64_t start = current_time_ms();
+		uint64_t last_executed = start;
+		uint32_t executed_calls = __atomic_load_n(output_data, __ATOMIC_RELAXED);
 		for (;;) {
 			int res = waitpid(-1, &status, __WALL | WNOHANG);
 			int errno0 = errno;
@@ -250,19 +264,35 @@ void loop()
 				break;
 			}
 			usleep(1000);
-			if (current_time_ms() - start > 5 * 1000) {
-				debug("waitpid(%d)=%d (%d)\n", pid, res, errno0);
-				debug("killing\n");
-				kill(-pid, SIGKILL);
-				kill(pid, SIGKILL);
-				for (;;) {
-					int res = waitpid(-1, &status, __WALL);
-					debug("waitpid(%d)=%d (%d)\n", pid, res, errno);
-					if (res == pid)
-						break;
-				}
-				break;
+			// Even though the test process executes exit at the end
+			// and execution time of each syscall is bounded by 20ms,
+			// this backup watchdog is necessary and its performance is important.
+			// The problem is that exit in the test processes can fail (sic).
+			// One observed scenario is that the test processes prohibits
+			// exit_group syscall using seccomp. Another observed scenario
+			// is that the test processes setups a userfaultfd for itself,
+			// then the main thread hangs when it wants to page in a page.
+			// Below we check if the test process still executes syscalls
+			// and kill it after 200ms of inactivity.
+			uint64_t now = current_time_ms();
+			uint32_t now_executed = __atomic_load_n(output_data, __ATOMIC_RELAXED);
+			if (executed_calls != now_executed) {
+				executed_calls = now_executed;
+				last_executed = now;
 			}
+			if ((now - start < 3 * 1000) && (now - last_executed < 200))
+				continue;
+			debug("waitpid(%d)=%d (%d)\n", pid, res, errno0);
+			debug("killing\n");
+			kill(-pid, SIGKILL);
+			kill(pid, SIGKILL);
+			for (;;) {
+				int res = waitpid(-1, &status, __WALL);
+				debug("waitpid(%d)=%d (%d)\n", pid, res, errno);
+				if (res == pid)
+					break;
+			}
+			break;
 		}
 		status = WEXITSTATUS(status);
 		if (status == kFailStatus)
@@ -281,7 +311,7 @@ retry:
 	uint64_t* input_pos = (uint64_t*)&input_data[0];
 	read_input(&input_pos); // flags
 	read_input(&input_pos); // pid
-	output_pos = (uint32_t*)&output_data[0];
+	output_pos = output_data;
 	write_output(0); // Number of executed syscalls (updated later).
 
 	if (!collide && !flag_threaded)
@@ -300,12 +330,14 @@ retry:
 			switch (typ) {
 			case arg_const: {
 				uint64_t arg = read_input(&input_pos);
-				copyin(addr, arg, size);
+				uint64_t bf_off = read_input(&input_pos);
+				uint64_t bf_len = read_input(&input_pos);
+				copyin(addr, arg, size, bf_off, bf_len);
 				break;
 			}
 			case arg_result: {
 				uint64_t val = read_result(&input_pos);
-				copyin(addr, val, size);
+				copyin(addr, val, size, 0, 0);
 				break;
 			}
 			case arg_data: {
@@ -350,12 +382,12 @@ retry:
 			for (;;) {
 				timespec ts = {};
 				ts.tv_sec = 0;
-				ts.tv_nsec = (100 - (now - start)) * 1000 * 1000;
+				ts.tv_nsec = (20 - (now - start)) * 1000 * 1000;
 				syscall(SYS_futex, &th->done, FUTEX_WAIT, 0, &ts);
 				if (__atomic_load_n(&th->done, __ATOMIC_RELAXED))
 					break;
 				now = current_time_ms();
-				if (now - start > 100)
+				if (now - start > 20)
 					break;
 			}
 			if (__atomic_load_n(&th->done, __ATOMIC_ACQUIRE))
@@ -432,6 +464,8 @@ void handle_completion(thread_t* th)
 		fail("bad thread state in completion: ready=%d done=%d handled=%d",
 		     th->ready, th->done, th->handled);
 	if (th->res != (uint64_t)-1) {
+		if (th->call_n >= kMaxCommands)
+			fail("result idx %ld overflows kMaxCommands", th->call_n);
 		results[th->call_n].executed = true;
 		results[th->call_n].val = th->res;
 		for (bool done = false; !done;) {
@@ -442,6 +476,8 @@ void handle_completion(thread_t* th)
 				char* addr = (char*)read_input(&th->copyout_pos);
 				uint64_t size = read_input(&th->copyout_pos);
 				uint64_t val = copyout(addr, size);
+				if (th->call_n >= kMaxCommands)
+					fail("result idx %ld overflows kMaxCommands", th->call_n);
 				results[th->call_n].executed = true;
 				results[th->call_n].val = val;
 				debug("copyout from %p\n", addr);
@@ -456,14 +492,52 @@ void handle_completion(thread_t* th)
 	if (!collide) {
 		write_output(th->call_index);
 		write_output(th->call_num);
-		write_output(th->res != (uint64_t)-1 ? 0 : th->reserrno);
-		write_output(th->cover_size);
-		// Truncate PCs to uint32_t assuming that they fit into 32-bits.
-		// True for x86_64 and arm64 without KASLR.
-		for (uint64_t i = 0; i < th->cover_size; i++)
-			write_output((uint32_t)th->cover_data[i + 1]);
+		uint32_t reserrno = th->res != (uint64_t)-1 ? 0 : th->reserrno;
+		write_output(reserrno);
+		uint32_t* signal_count_pos = write_output(0); // filled in later
+		uint32_t* cover_count_pos = write_output(0);  // filled in later
+
+		// Write out feedback signals.
+		// Currently it is code edges computed as xor of two subsequent basic block PCs.
+		uint64_t* cover_data = th->cover_data + 1;
+		uint32_t cover_size = th->cover_size;
+		uint32_t prev = 0;
+		uint32_t nsig = 0;
+		for (uint32_t i = 0; i < cover_size; i++) {
+			uint32_t pc = cover_data[i];
+			uint32_t sig = pc ^ prev;
+			prev = hash(pc);
+			if (dedup(sig))
+				continue;
+			write_output(sig);
+			nsig++;
+		}
+		*signal_count_pos = nsig;
+		if (flag_collect_cover) {
+			// Write out real coverage (basic block PCs).
+			if (flag_dedup_cover) {
+				std::sort(cover_data, cover_data + cover_size);
+				uint64_t w = 0;
+				uint64_t last = 0;
+				for (uint32_t i = 0; i < cover_size; i++) {
+					uint64_t pc = cover_data[i];
+					if (pc == last)
+						continue;
+					cover_data[w++] = last = pc;
+				}
+				cover_size = w;
+			}
+			// Truncate PCs to uint32_t assuming that they fit into 32-bits.
+			// True for x86_64 and arm64 without KASLR.
+			for (uint32_t i = 0; i < cover_size; i++)
+				write_output((uint32_t)cover_data[i]);
+			*cover_count_pos = cover_size;
+		}
+		debug("out #%u: index=%u num=%u errno=%d sig=%u cover=%u\n",
+		      completed, th->call_index, th->call_num, reserrno, nsig, cover_size);
+
 		completed++;
-		__atomic_store_n((uint32_t*)&output_data[0], completed, __ATOMIC_RELEASE);
+		__atomic_store_n(output_data, completed, __ATOMIC_RELEASE);
 	}
 	th->handled = true;
 	running--;
@@ -516,7 +590,7 @@ void execute_call(thread_t* th)
 	th->cover_size = cover_read(th);
 
 	if (th->res == (uint64_t)-1)
-		debug("#%d: %s = errno(%d)\n", th->id, call->name, th->reserrno);
+		debug("#%d: %s = errno(%ld)\n", th->id, call->name, th->reserrno);
 	else
 		debug("#%d: %s = 0x%lx\n", th->id, call->name, th->res);
 	__atomic_store_n(&th->done, 1, __ATOMIC_RELEASE);
@@ -565,42 +639,54 @@ uint64_t cover_read(thread_t* th)
 	debug("#%d: read cover = %d\n", th->id, n);
 	if (n >= kCoverSize)
 		fail("#%d: too much cover %d", th->id, n);
-	if (flag_deduplicate) {
-		n = cover_dedup(th, n);
-		debug("#%d: dedup cover %d\n", th->id, n);
-	}
 	return n;
 }
 
-uint64_t cover_dedup(thread_t* th, uint64_t n)
+static uint32_t hash(uint32_t a)
 {
-	uint64_t* cover_data = th->cover_data + 1;
-	std::sort(cover_data, cover_data + n);
-	uint64_t w = 0;
-	uint64_t last = 0;
-	for (uint64_t i = 0; i < n; i++) {
-		uint64_t pc = cover_data[i];
-		if (pc == last)
-			continue;
-		cover_data[w++] = last = pc;
-	}
-	return w;
+	a = (a ^ 61) ^ (a >> 16);
+	a = a + (a << 3);
+	a = a ^ (a >> 4);
+	a = a * 0x27d4eb2d;
+	a = a ^ (a >> 15);
+	return a;
 }
 
-void copyin(char* addr, uint64_t val, uint64_t size)
+const uint32_t dedup_table_size = 8 << 10;
+uint32_t dedup_table[dedup_table_size];
+
+// Poorman's best-effort hashmap-based deduplication.
+// The hashmap is global which means that we deduplicate across different calls.
+// This is OK because we are interested only in new signals.
+static bool dedup(uint32_t sig)
+{
+	for (uint32_t i = 0; i < 4; i++) {
+		uint32_t pos = (sig + i) % dedup_table_size;
+		if (dedup_table[pos] == sig)
+			return true;
+		if (dedup_table[pos] == 0) {
+			dedup_table[pos] = sig;
+			return false;
+		}
+	}
+	dedup_table[sig % dedup_table_size] = sig;
+	return false;
+}
+
+void copyin(char* addr, uint64_t val, uint64_t size, uint64_t bf_off, uint64_t bf_len)
 {
 	NONFAILING(switch (size) {
 		case 1:
-			*(uint8_t*)addr = val;
+			STORE_BY_BITMASK(uint8_t, addr, val, bf_off, bf_len);
 			break;
 		case 2:
-			*(uint16_t*)addr = val;
+			STORE_BY_BITMASK(uint16_t, addr, val, bf_off, bf_len);
 			break;
 		case 4:
-			*(uint32_t*)addr = val;
+			STORE_BY_BITMASK(uint32_t, addr, val, bf_off, bf_len);
 			break;
 		case 8:
-			*(uint64_t*)addr = val;
+			STORE_BY_BITMASK(uint64_t, addr, val, bf_off, bf_len);
 			break;
 		default:
 			fail("copyin: bad argument size %lu", size);
@@ -638,6 +724,9 @@ uint64_t read_arg(uint64_t** input_posp)
 	switch (typ) {
 	case arg_const: {
 		arg = read_input(input_posp);
+		// Bitfields can't be args of a normal syscall, so just ignore them.
+		read_input(input_posp); // bit field offset
+		read_input(input_posp); // bit field length
 		break;
 	}
 	case arg_result: {
@@ -677,11 +766,12 @@ uint64_t read_input(uint64_t** input_posp, bool peek)
 	return *input_pos;
 }
 
-void write_output(uint32_t v)
+uint32_t* write_output(uint32_t v)
 {
 	if (collide)
-		return;
-	if ((char*)output_pos >= output_data + kMaxOutput)
+		return 0;
+	if (output_pos < output_data || (char*)output_pos >= (char*)output_data + kMaxOutput)
 		fail("output overflow");
-	*output_pos++ = v;
+	*output_pos = v;
+	return output_pos++;
 }

@@ -12,10 +12,6 @@ include <linux/stat.h>
 include <linux/xattr.h>
 include <linux/mman.h>
 include <linux/time.h>
-include <linux/ipc.h>
-include <linux/shm.h>
-include <linux/msg.h>
-include <linux/sem.h>
 include <linux/prctl.h>
 include <linux/mount.h>
 include <linux/fs.h>
@@ -72,11 +68,11 @@ include <linux/ioprio.h>
 resource fd[int32]: 0xffffffffffffffff, AT_FDCWD
 resource fd_dir[fd]
 
-open(file filename, flags flags[open_flags], mode flags[open_mode]) fd
+open(file ptr[in, filename], flags flags[open_flags], mode flags[open_mode]) fd
 # Just so that we have something that creates fd_dir resources.
-open$dir(file filename, flags flags[open_flags], mode flags[open_mode]) fd_dir
-openat(fd fd_dir, file filename, flags flags[open_flags], mode flags[open_mode]) fd
-creat(file filename, mode flags[open_mode]) fd
+open$dir(file ptr[in, filename], flags flags[open_flags], mode flags[open_mode]) fd_dir
+openat(fd fd_dir, file ptr[in, filename], flags flags[open_flags], mode flags[open_mode]) fd
+creat(file ptr[in, filename], mode flags[open_mode]) fd
 close(fd fd)
 read(fd fd, buf buffer[out], count len[buf]) len[buf]
 pread64(fd fd, buf buffer[out], count len[buf], pos fileoff)
@@ -100,8 +96,8 @@ splice(fdin fd, offin fileoff, fdout fd, offout fileoff, len int64, f flags[spli
 vmsplice(fd fd, vec ptr[in, array[iovec_in]], vlen len[vec], f flags[splice_flags])
 sendfile(fdout fd, fdin fd, off ptr[inout, fileoff[int64], opt], count int64)
 
-stat(file filename, statbuf ptr[out, stat])
-lstat(file filename, statbuf ptr[out, stat])
+stat(file ptr[in, filename], statbuf ptr[out, stat])
+lstat(file ptr[in, filename], statbuf ptr[out, stat])
 fstat(fd fd, statbuf ptr[out, stat])
 
 poll(fds ptr[in, array[pollfd]], nfds len[fds], timeout int32)
@@ -112,7 +108,9 @@ pselect6(n len[inp], inp ptr[inout, fd_set], outp ptr[inout, fd_set], exp ptr[in
 resource fd_epoll[fd]
 epoll_create(size int32) fd_epoll
 epoll_create1(flags flags[epoll_flags]) fd_epoll
-epoll_ctl(epfd fd_epoll, op flags[epoll_op], fd fd, ev ptr[in, epoll_event])
+epoll_ctl$EPOLL_CTL_ADD(epfd fd_epoll, op const[EPOLL_CTL_ADD], fd fd, ev ptr[in, epoll_event])
+epoll_ctl$EPOLL_CTL_MOD(epfd fd_epoll, op const[EPOLL_CTL_MOD], fd fd, ev ptr[in, epoll_event])
+epoll_ctl$EPOLL_CTL_DEL(epfd fd_epoll, op const[EPOLL_CTL_DEL], fd fd)
 epoll_wait(epfd fd_epoll, events ptr[out, array[epoll_event]], maxevents len[events], timeout int32)
 epoll_pwait(epfd fd_epoll, events ptr[out, array[epoll_event]], maxevents len[events], timeout int32, sigmask ptr[in, sigset], size len[sigmask])
 
@@ -246,43 +244,21 @@ mq_notify(mqd fd_mq, notif ptr[in, sigevent])
 mq_getsetattr(mqd fd_mq, attr ptr[in, mq_attr], oldattr ptr[out, mq_attr, opt])
 mq_unlink(name ptr[in, string])
 
-resource ipc[int32]: 0, 0xffffffffffffffff
-resource ipc_msq[ipc]
-resource ipc_sem[ipc]
-resource ipc_shm[ipc]
-
-msgget(key int32, flags flags[msgget_flags]) ipc_msq
-msgsnd(msqid ipc_msq, msgp buffer[in], flags flags[msg_flags])
-msgrcv(msqid ipc_msq, msgp buffer[out], sz len[msgp], typ intptr, flags flags[msg_flags])
-msgctl(msqid ipc_msq, cmd flags[msgctl_cmd], buf ptr[inout, msqid_ds])
-
-semget(key int32, nsems intptr, flags flags[semget_flags]) ipc_sem
-semop(semid ipc_sem, ops ptr[in, array[sembuf]], nops len[ops])
-semtimedop(semid ipc_sem, ops ptr[in, array[sembuf]], nops len[ops], timeout ptr[in, timespec])
-semctl(semid ipc_sem, semnum intptr, cmd flags[semctl_cmd], arg ptr[in, semid_ds])
-
-# The unused arg is unused by syscall (does not exist at all),
-# but it helps to generate sane size values.
-shmget(key int32, size len[unused], flags flags[shmget_flags], unused vma) ipc_shm
-shmat(shmid ipc_shm, addr vma, flags flags[shmat_flags])
-shmctl(shmid ipc_shm, cmd flags[shmctl_cmd], buf ptr[inout, shmid_ds])
-shmdt(addr vma)
-
-mknod(file filename, mode flags[mknod_mode], dev int32)
-mknodat(dirfd fd_dir, file filename, mode flags[mknod_mode], dev int32)
-chmod(file filename, mode flags[open_mode])
+mknod(file ptr[in, filename], mode flags[mknod_mode], dev int32)
+mknodat(dirfd fd_dir, file ptr[in, filename], mode flags[mknod_mode], dev int32)
+chmod(file ptr[in, filename], mode flags[open_mode])
 fchmod(fd fd, mode flags[open_mode])
-fchmodat(dirfd fd_dir, file filename, mode flags[open_mode])
-chown(file filename, uid uid, gid gid)
-lchown(file filename, uid uid, gid gid)
+fchmodat(dirfd fd_dir, file ptr[in, filename], mode flags[open_mode])
+chown(file ptr[in, filename], uid uid, gid gid)
+lchown(file ptr[in, filename], uid uid, gid gid)
 fchown(fd fd, uid uid, gid gid)
-fchownat(dirfd fd_dir, file filename, uid uid, gid gid, flags flags[fchownat_flags])
+fchownat(dirfd fd_dir, file ptr[in, filename], uid uid, gid gid, flags flags[fchownat_flags])
 fallocate(fd fd, mode flags[fallocate_mode], off intptr, len intptr)
-faccessat(dirfd fd_dir, pathname filename, mode flags[open_mode], flags flags[faccessat_flags])
-utime(filename filename, times ptr[in, utimbuf])
-utimes(filename filename, times ptr[in, itimerval])
-futimesat(dir fd_dir, pathname filename, times ptr[in, itimerval])
-utimensat(dir fd_dir, pathname filename, times ptr[in, itimerval], flags flags[utimensat_flags])
+faccessat(dirfd fd_dir, pathname ptr[in, filename], mode flags[open_mode], flags flags[faccessat_flags])
+utime(filename ptr[in, filename], times ptr[in, utimbuf])
+utimes(filename ptr[in, filename], times ptr[in, itimerval])
+futimesat(dir fd_dir, pathname ptr[in, filename], times ptr[in, itimerval])
+utimensat(dir fd_dir, pathname ptr[in, filename], times ptr[in, itimerval], flags flags[utimensat_flags])
 
 resource pid[int32]: 0, 0xffffffffffffffff
 resource uid[int32]: 0, 0xffffffffffffffff
@@ -321,26 +297,26 @@ resource fd_fanotify[fd]
 resource inotifydesc[int32]
 inotify_init() fd_inotify
 inotify_init1(flags flags[inotify_flags]) fd_inotify
-inotify_add_watch(fd fd_inotify, file filename, mask flags[inotify_mask]) inotifydesc
+inotify_add_watch(fd fd_inotify, file ptr[in, filename], mask flags[inotify_mask]) inotifydesc
 inotify_rm_watch(fd fd_inotify, wd inotifydesc)
 fanotify_init(flags flags[fanotify_flags], events flags[fanotify_events]) fd_fanotify
-fanotify_mark(fd fd_fanotify, flags flags[fanotify_mark], mask flags[fanotify_mask], fddir fd_dir, path filename)
+fanotify_mark(fd fd_fanotify, flags flags[fanotify_mark], mask flags[fanotify_mask], fddir fd_dir, path ptr[in, filename])
 
-link(old filename, new filename)
-linkat(oldfd fd_dir, old filename, newfd fd_dir, new filename, flags flags[linkat_flags])
-symlinkat(old filename, newfd fd_dir, new filename)
-symlink(old filename, new filename)
-unlink(path filename)
-unlinkat(fd fd_dir, path filename, flags flags[unlinkat_flags])
-readlink(path filename, buf buffer[out], siz len[buf])
-readlinkat(fd fd_dir, path filename, buf buffer[out], siz len[buf])
-rename(old filename, new filename)
-renameat(oldfd fd_dir, old filename, newfd fd_dir, new filename)
-renameat2(oldfd fd_dir, old filename, newfd fd_dir, new filename, flags flags[renameat2_flags])
-mkdir(path filename, mode flags[open_mode])
-mkdirat(fd fd_dir, path filename, mode flags[open_mode])
-rmdir(path filename)
-truncate(file filename, len intptr)
+link(old ptr[in, filename], new ptr[in, filename])
+linkat(oldfd fd_dir, old ptr[in, filename], newfd fd_dir, new ptr[in, filename], flags flags[linkat_flags])
+symlinkat(old ptr[in, filename], newfd fd_dir, new ptr[in, filename])
+symlink(old ptr[in, filename], new ptr[in, filename])
+unlink(path ptr[in, filename])
+unlinkat(fd fd_dir, path ptr[in, filename], flags flags[unlinkat_flags])
+readlink(path ptr[in, filename], buf buffer[out], siz len[buf])
+readlinkat(fd fd_dir, path ptr[in, filename], buf buffer[out], siz len[buf])
+rename(old ptr[in, filename], new ptr[in, filename])
+renameat(oldfd fd_dir, old ptr[in, filename], newfd fd_dir, new ptr[in, filename])
+renameat2(oldfd fd_dir, old ptr[in, filename], newfd fd_dir, new ptr[in, filename], flags flags[renameat2_flags])
+mkdir(path ptr[in, filename], mode flags[open_mode])
+mkdirat(fd fd_dir, path ptr[in, filename], mode flags[open_mode])
+rmdir(path ptr[in, filename])
+truncate(file ptr[in, filename], len intptr)
 ftruncate(fd fd, len intptr)
 flock(fd fd, op flags[flock_op])
 fsync(fd fd)
@@ -351,23 +327,23 @@ sync_file_range(fd fd, off intptr, nbytes intptr, flags flags[sync_file_flags])
 lookup_dcookie(cookie int64, buf buffer[out], len len[buf])
 getdents(fd fd_dir, ent buffer[out], count len[ent])
 getdents64(fd fd_dir, ent buffer[out], count len[ent])
-name_to_handle_at(fd fd_dir, file filename, handle ptr[in, file_handle], mnt ptr[out, int32], flags flags[name_to_handle_at_flags])
+name_to_handle_at(fd fd_dir, file ptr[in, filename], handle ptr[in, file_handle], mnt ptr[out, int32], flags flags[name_to_handle_at_flags])
 open_by_handle_at(mountdirfd fd, handle ptr[in, file_handle], flags flags[open_flags])
 
-mount(src filename, dst filename, type ptr[in, string[filesystem]], flags flags[mount_flags], data buffer[in])
-mount$fs(src ptr[in, string[filesystem]], dst filename, type ptr[in, string[filesystem]], flags flags[mount_flags], data buffer[in])
-umount2(path filename, flags flags[umount_flags])
-pivot_root(new_root filename, put_old filename)
+mount(src ptr[in, filename], dst ptr[in, filename], type ptr[in, string[filesystem]], flags flags[mount_flags], data buffer[in])
+mount$fs(src ptr[in, string[filesystem]], dst ptr[in, filename], type ptr[in, string[filesystem]], flags flags[mount_flags], data buffer[in])
+umount2(path ptr[in, filename], flags flags[umount_flags])
+pivot_root(new_root ptr[in, filename], put_old ptr[in, filename])
 
-filesystem = "sysfs", "rootfs", "ramfs", "tmpfs", "devtmpfs", "debugfs", "securityfs", "sockfs", "pipefs", "anon_inodefs", "devpts", "ext3", "ext2", "ext4", "hugetlbfs", "vfat", "ecryptfs", "kdbusfs", "fuseblk", "fuse", "rpc_pipefs", "nfs", "nfs4", "nfsd", "binfmt_misc", "autofs", "xfs", "jfs", "msdos", "ntfs", "minix", "hfs", "hfsplus", "qnx4", "ufs", "btrfs", "configfs", "ncpfs", "qnx6", "exofs", "befs", "vxfs", "gfs2", "gfs2meta", "fusectl", "bfs", "nsfs", "efs", "cifs", "efivarfs", "affs", "tracefs", "bdev", "ocfs2", "ocfs2_dlmfs", "hpfs", "proc", "afs", "reiserfs", "jffs2", "romfs", "aio", "sysv", "v7", "udf", "ceph", "pstore", "adfs", "9p", "hostfs", "squashfs", "cramfs", "iso9660", "coda", "nilfs2", "logfs", "overlay", "f2fs", "omfs", "ubifs", "openpromfs", "bpf", "cgroup", "cgroup2"
+filesystem = "sysfs", "rootfs", "ramfs", "tmpfs", "devtmpfs", "debugfs", "securityfs", "sockfs", "pipefs", "anon_inodefs", "devpts", "ext3", "ext2", "ext4", "hugetlbfs", "vfat", "ecryptfs", "fuseblk", "fuse", "rpc_pipefs", "nfs", "nfs4", "nfsd", "binfmt_misc", "autofs", "xfs", "jfs", "msdos", "ntfs", "minix", "hfs", "hfsplus", "qnx4", "ufs", "btrfs", "configfs", "ncpfs", "qnx6", "exofs", "befs", "vxfs", "gfs2", "gfs2meta", "fusectl", "bfs", "nsfs", "efs", "cifs", "efivarfs", "affs", "tracefs", "bdev", "ocfs2", "ocfs2_dlmfs", "hpfs", "proc", "afs", "reiserfs", "jffs2", "romfs", "aio", "sysv", "v7", "udf", "ceph", "pstore", "adfs", "9p", "hostfs", "squashfs", "cramfs", "iso9660", "coda", "nilfs2", "logfs", "overlay", "f2fs", "omfs", "ubifs", "openpromfs", "bpf", "cgroup", "cgroup2", "cpuset", "mqueue", "aufs", "selinuxfs"
 
 sysfs$1(option const[1], fsname ptr[in, string])
 sysfs$2(option const[2], fsindex intptr, fsname buffer[out])
 sysfs$3(option const[3])
-statfs(path filename, buf buffer[out])
+statfs(path ptr[in, filename], buf buffer[out])
 fstatfs(fd fd, buf buffer[out])
 
-uselib(lib filename)
+uselib(lib ptr[in, filename])
 init_module(mod ptr[in, string], len len[mod], args ptr[in, string])
 finit_module(fd fd, args ptr[in, string], flags flags[finit_module_flags])
 delete_module(name ptr[in, string], flags flags[delete_module_flags])
@@ -377,7 +353,7 @@ syslog(cmd flags[syslog_cmd], buf buffer[out, opt], len len[buf])
 uname(buf buffer[out])
 sysinfo(info buffer[out])
 ustat(dev intptr, buf ptr[out, ustat])
-acct(filename filename[opt])
+acct(filename ptr[in, filename, opt])
 
 getrusage(who flags[rusage_who], usage ptr[out, rusage])
 getrlimit(res flags[rlimit_type], rlim ptr[out, rlimit])
@@ -392,17 +368,17 @@ ioprio_set$pid(which flags[ioprio_which_pid], who pid, prio intptr)
 ioprio_set$uid(which flags[ioprio_which_uid], who uid, prio intptr)
 setns(fd fd, type flags[ns_type])
 
-setxattr(path filename, name ptr[in, string], val ptr[in, string], size len[val], flags flags[setxattr_flags])
-lsetxattr(path filename,  name ptr[in, string], val ptr[in, string], size len[val], flags flags[setxattr_flags])
+setxattr(path ptr[in, filename], name ptr[in, string], val ptr[in, string], size len[val], flags flags[setxattr_flags])
+lsetxattr(path ptr[in, filename],  name ptr[in, string], val ptr[in, string], size len[val], flags flags[setxattr_flags])
 fsetxattr(fd fd,  name ptr[in, string], val ptr[in, string], size len[val], flags flags[setxattr_flags])
-getxattr(path filename,  name ptr[in, string], val buffer[out], size len[val])
-lgetxattr(path filename,  name ptr[in, string], val buffer[out], size len[val])
+getxattr(path ptr[in, filename],  name ptr[in, string], val buffer[out], size len[val])
+lgetxattr(path ptr[in, filename],  name ptr[in, string], val buffer[out], size len[val])
 fgetxattr(fd fd,  name ptr[in, string], val buffer[out], size len[val])
-listxattr(path filename, list buffer[out], size len[list])
-llistxattr(path filename, list buffer[out], size len[list])
+listxattr(path ptr[in, filename], list buffer[out], size len[list])
+llistxattr(path ptr[in, filename], list buffer[out], size len[list])
 flistxattr(fd fd, list buffer[out], size len[list])
-removexattr(path filename,  name ptr[in, string])
-lremovexattr(path filename,  name ptr[in, string])
+removexattr(path ptr[in, filename],  name ptr[in, string])
+lremovexattr(path ptr[in, filename],  name ptr[in, string])
 fremovexattr(fd fd,  name ptr[in, string])
 
 resource timerid[int32]
@@ -480,39 +456,11 @@ membarrier(cmd const[1], flags const[0])
 # They need a more comprehensive support. But let at least open them for now,
 # maybe fuzzer will be able to skrew them in a useful way.
 syz_open_dev$floppy(dev ptr[in, string["/dev/fd#"]], id intptr, flags flags[open_flags]) fd
-syz_open_dev$pktcdvd(dev ptr[in, string["/dev/pktcdvd/control"]], id const[0], flags flags[open_flags]) fd
-syz_open_dev$lightnvm(dev ptr[in, string["/dev/lightnvm/control"]], id const[0], flags flags[open_flags]) fd
-syz_open_dev$vcs(dev ptr[in, string["/dev/vcs"]], id const[0], flags flags[open_flags]) fd
 syz_open_dev$vcsn(dev ptr[in, string["/dev/vcs#"]], id intptr, flags flags[open_flags]) fd
 syz_open_dev$vcsa(dev ptr[in, string["/dev/vcsa#"]], id intptr, flags flags[open_flags]) fd
-syz_open_dev$vga_arbiter(dev ptr[in, string["/dev/vga_arbiter"]], id const[0], flags flags[open_flags]) fd
-syz_open_dev$vhci(dev ptr[in, string["/dev/vhci"]], id const[0], flags flags[open_flags]) fd
-syz_open_dev$userio(dev ptr[in, string["/dev/userio"]], id const[0], flags flags[open_flags]) fd
-syz_open_dev$rtc(dev ptr[in, string["/dev/rtc"]], id const[0], flags flags[open_flags]) fd
-syz_open_dev$rfkill(dev ptr[in, string["/dev/rfkill"]], id const[0], flags flags[open_flags]) fd
-syz_open_dev$qat_adf_ctl(dev ptr[in, string["/dev/qat_adf_ctl"]], id const[0], flags flags[open_flags]) fd
-syz_open_dev$ppp(dev ptr[in, string["/dev/ppp"]], id const[0], flags flags[open_flags]) fd
-syz_open_dev$mixer(dev ptr[in, string["/dev/mixer"]], id const[0], flags flags[open_flags]) fd
-syz_open_dev$irnet(dev ptr[in, string["/dev/irnet"]], id const[0], flags flags[open_flags]) fd
-syz_open_dev$hwrng(dev ptr[in, string["/dev/hwrng"]], id const[0], flags flags[open_flags]) fd
-syz_open_dev$hpet(dev ptr[in, string["/dev/hpet"]], id const[0], flags flags[open_flags]) fd
-syz_open_dev$hidraw0(dev ptr[in, string["/dev/hidraw0"]], id const[0], flags flags[open_flags]) fd
-syz_open_dev$fb0(dev ptr[in, string["/dev/fb0"]], id const[0], flags flags[open_flags]) fd
-syz_open_dev$cuse(dev ptr[in, string["/dev/cuse"]], id const[0], flags flags[open_flags]) fd
-syz_open_dev$capi20(dev ptr[in, string["/dev/capi20"]], id const[0], flags flags[open_flags]) fd
-syz_open_dev$autofs(dev ptr[in, string["/dev/autofs"]], id const[0], flags flags[open_flags]) fd
-syz_open_dev$keychord(dev ptr[in, string["/dev/keychord"]], id const[0], flags flags[open_flags]) fd
-syz_open_dev$zygote(dev ptr[in, string["/dev/socket/zygote"]], id const[0], flags flags[open_flags]) fd
-syz_open_dev$sw_sync(dev ptr[in, string["/dev/sw_sync"]], id const[0], flags flags[open_flags]) fd
-syz_open_dev$sr(dev ptr[in, string["/dev/sr0"]], id const[0], flags flags[open_flags]) fd
-syz_open_dev$sequencer(dev ptr[in, string["/dev/sequencer"]], id const[0], flags flags[open_flags]) fd
-syz_open_dev$sequencer2(dev ptr[in, string["/dev/sequencer2"]], id const[0], flags flags[open_flags]) fd
-syz_open_dev$dsp(dev ptr[in, string["/dev/dsp"]], id const[0], flags flags[open_flags]) fd
-syz_open_dev$audio(dev ptr[in, string["/dev/audio"]], id const[0], flags flags[open_flags]) fd
 syz_open_dev$usbmon(dev ptr[in, string["/dev/usbmon#"]], id intptr, flags flags[open_flags]) fd
 syz_open_dev$sg(dev ptr[in, string["/dev/sg#"]], id intptr, flags flags[open_flags]) fd
 syz_open_dev$midi(dev ptr[in, string["/dev/midi#"]], id intptr, flags flags[open_flags]) fd
-syz_open_dev$loop(dev ptr[in, string["/dev/loop#"]], id intptr, flags flags[open_flags]) fd
 syz_open_dev$ircomm(dev ptr[in, string["/dev/ircomm#"]], id intptr, flags flags[open_flags]) fd
 syz_open_dev$dspn(dev ptr[in, string["/dev/dsp#"]], id intptr, flags flags[open_flags]) fd
 syz_open_dev$dmmidi(dev ptr[in, string["/dev/dmmidi#"]], id intptr, flags flags[open_flags]) fd
@@ -525,6 +473,37 @@ syz_open_dev$sndhw(dev ptr[in, string["/dev/snd/hwC#D#"]], id intptr, flags flag
 syz_open_dev$sndmidi(dev ptr[in, string["/dev/snd/midiC#D#"]], id intptr, flags flags[open_flags]) fd
 syz_open_dev$sndpcmc(dev ptr[in, string["/dev/snd/pcmC#D#c"]], id intptr, flags flags[open_flags]) fd
 syz_open_dev$sndpcmp(dev ptr[in, string["/dev/snd/pcmC#D#p"]], id intptr, flags flags[open_flags]) fd
+
+openat$vga_arbiter(fd const[AT_FDCWD], file ptr[in, string["/dev/vga_arbiter"]], flags flags[open_flags], mode const[0]) fd
+openat$vhci(fd const[AT_FDCWD], file ptr[in, string["/dev/vhci"]], flags flags[open_flags], mode const[0]) fd
+openat$userio(fd const[AT_FDCWD], file ptr[in, string["/dev/userio"]], flags flags[open_flags], mode const[0]) fd
+openat$rtc(fd const[AT_FDCWD], file ptr[in, string["/dev/rtc"]], flags flags[open_flags], mode const[0]) fd
+openat$rfkill(fd const[AT_FDCWD], file ptr[in, string["/dev/rfkill"]], flags flags[open_flags], mode const[0]) fd
+openat$qat_adf_ctl(fd const[AT_FDCWD], file ptr[in, string["/dev/qat_adf_ctl"]], flags flags[open_flags], mode const[0]) fd
+openat$ppp(fd const[AT_FDCWD], file ptr[in, string["/dev/ppp"]], flags flags[open_flags], mode const[0]) fd
+openat$mixer(fd const[AT_FDCWD], file ptr[in, string["/dev/mixer"]], flags flags[open_flags], mode const[0]) fd
+openat$irnet(fd const[AT_FDCWD], file ptr[in, string["/dev/irnet"]], flags flags[open_flags], mode const[0]) fd
+openat$hwrng(fd const[AT_FDCWD], file ptr[in, string["/dev/hwrng"]], flags flags[open_flags], mode const[0]) fd
+openat$hpet(fd const[AT_FDCWD], file ptr[in, string["/dev/hpet"]], flags flags[open_flags], mode const[0]) fd
+openat$hidraw0(fd const[AT_FDCWD], file ptr[in, string["/dev/hidraw0"]], flags flags[open_flags], mode const[0]) fd
+openat$fb0(fd const[AT_FDCWD], file ptr[in, string["/dev/fb0"]], flags flags[open_flags], mode const[0]) fd
+openat$cuse(fd const[AT_FDCWD], file ptr[in, string["/dev/cuse"]], flags flags[open_flags], mode const[0]) fd
+openat$capi20(fd const[AT_FDCWD], file ptr[in, string["/dev/capi20"]], flags flags[open_flags], mode const[0]) fd
+openat$autofs(fd const[AT_FDCWD], file ptr[in, string["/dev/autofs"]], flags flags[open_flags], mode const[0]) fd
+openat$binder(fd const[AT_FDCWD], file ptr[in, string["/dev/binder"]], flags flags[open_flags], mode const[0]) fd
+openat$ion(fd const[AT_FDCWD], file ptr[in, string["/dev/ion"]], flags flags[open_flags], mode const[0]) fd
+openat$keychord(fd const[AT_FDCWD], file ptr[in, string["/dev/keychord"]], flags flags[open_flags], mode const[0]) fd
+openat$zygote(fd const[AT_FDCWD], file ptr[in, string["/dev/socket/zygote"]], flags flags[open_flags], mode const[0]) fd
+openat$sw_sync(fd const[AT_FDCWD], file ptr[in, string["/dev/sw_sync"]], flags flags[open_flags], mode const[0]) fd
+openat$sr(fd const[AT_FDCWD], file ptr[in, string["/dev/sr0"]], flags flags[open_flags], mode const[0]) fd
+openat$pktcdvd(fd const[AT_FDCWD], file ptr[in, string["/dev/pktcdvd/control"]], flags flags[open_flags], mode const[0]) fd
+openat$lightnvm(fd const[AT_FDCWD], file ptr[in, string["/dev/lightnvm/control"]], flags flags[open_flags], mode const[0]) fd
+openat$vcs(fd const[AT_FDCWD], file ptr[in, string["/dev/vcs"]], flags flags[open_flags], mode const[0]) fd
+openat$sequencer(fd const[AT_FDCWD], file ptr[in, string["/dev/sequencer"]], flags flags[open_flags], mode const[0]) fd
+openat$sequencer2(fd const[AT_FDCWD], file ptr[in, string["/dev/sequencer2"]], flags flags[open_flags], mode const[0]) fd
+openat$dsp(fd const[AT_FDCWD], file ptr[in, string["/dev/dsp"]], flags flags[open_flags], mode const[0]) fd
+openat$audio(fd const[AT_FDCWD], file ptr[in, string["/dev/audio"]], flags flags[open_flags], mode const[0]) fd
+openat$xenevtchn(fd const[AT_FDCWD], file ptr[in, string["/dev/xen/evtchn"]], flags flags[open_flags], mode const[0]) fd
 
 
 
@@ -567,8 +546,8 @@ stat {
 
 pollfd {
 	fd	fd
-	events	int16
-	revents	int16
+	events	flags[pollfd_events, int16]
+	revents	const[0, int16]
 }
 
 sigset {
@@ -615,7 +594,7 @@ io_event {
 }
 
 iocb {
-	data	int64
+	data	const[0, int64]
 	key	flags[iocb_key, int32]
 	pad	const[0, int32]
 	op	flags[lio_opcode, int16]
@@ -665,8 +644,8 @@ cap_data {
 
 epoll_event {
 	ev	flags[epoll_ev, int32]
-	data	int64
-}
+	data	const[0, int64]
+} [packed]
 
 # fd_set needs to be a separate type
 fd_set {
@@ -678,70 +657,6 @@ fd_set {
 	mask5	int64
 	mask6	int64
 	mask7	int64
-}
-
-ipc_perm {
-	key	int32
-	uid	uid
-	gid	gid
-	cuid	uid
-	cgid	gid
-	mode	int16
-	seq	int16
-}
-
-msqid_ds {
-	key	int32
-	uid	uid
-	gid	gid
-	cuid	uid
-	cgid	gid
-	mode	int16
-	seq	int16
-	stime	intptr
-	rtime	intptr
-	ctime	intptr
-	cbytes	intptr
-	qnum	intptr
-	qbytes	intptr
-	lspid	pid
-	lrpid	pid
-}
-
-shmid_ds {
-	key	int32
-	uid	uid
-	gid	gid
-	cuid	uid
-	cgid	gid
-	mode	int16
-	seq	int16
-	segsz	intptr
-	atime	intptr
-	dtime	intptr
-	ctime	intptr
-	cpid	pid
-	lpid	pid
-	nattch	intptr
-}
-
-semid_ds {
-	key	int32
-	uid	uid
-	gid	gid
-	cuid	uid
-	cgid	gid
-	mode	int16
-	seq	int16
-	otime	intptr
-	ctime	intptr
-	nsems	intptr
-}
-
-sembuf {
-	num	int16
-	op	int16
-	flg	flags[semop_flags, int64]
 }
 
 sock_fprog {
@@ -915,140 +830,6 @@ ucred {
 	gid	gid
 }
 
-ip_mreq {
-	multi	in_addr
-	addr	in_addr
-}
-
-ip_mreqn {
-	multi	in_addr
-	addr	in_addr
-	ifindex	int32
-}
-
-ip_mreq_source {
-	multi	in_addr
-	iface	in_addr
-	source	in_addr
-}
-
-ip_msfilter {
-	multi	in_addr
-	iface	in_addr
-	fmode	flags[ip_msfilter_mode, int32]
-	numsrc	len[slist, int32]
-	slist	array[in_addr]
-}
-
-in_pktinfo {
-	ifindex	int32
-	dst	in_addr
-	addr	in_addr
-}
-
-xfrm_filer {
-	info	xfrm_userpolicy_info
-	tmpl	xfrm_user_tmpl
-}
-
-xfrm_userpolicy_info {
-	sel	xfrm_selector
-	lft	xfrm_lifetime_cfg
-	cur	xfrm_lifetime_cur
-	prio	int32
-	index	int32
-	dir	int8
-	action	int8
-	flags	int8
-	share	int8
-}
-
-xfrm_user_tmpl {
-	id	xfrm_id
-	fam	int16
-	saddr	xfrm_in_addr
-	reqid	int32
-	mode	int8
-	share	int8
-	opt	int8
-	aalgod	int32
-	ealgos	int32
-	calgos	int32
-}
-
-xfrm_selector {
-	daddr	xfrm_in_addr
-	saddr	xfrm_in_addr
-	dport	proc[int16be, 20000, 4]
-	dmask	int16
-	sport	proc[int16be, 20000, 4]
-	smask	int16
-	fam	int16
-	len_d	int8
-	len_s	int8
-	proto	int8
-	ifindex	int32
-	user	int32
-}
-
-xfrm_lifetime_cfg {
-	x0	int64
-	x1	int64
-	x2	int64
-	x3	int64
-	x4	int64
-	x5	int64
-	x6	int64
-	x7	int64
-}
-
-xfrm_lifetime_cur {
-	bytes	int64
-	packets	int64
-	atime	int64
-	utime	int64
-}
-
-xfrm_id {
-	daddr	xfrm_in_addr
-	spi	int32
-	proto	int8
-}
-
-xfrm_in_addr [
-	in	in_addr
-	in6	in6_addr
-]
-
-in_addr [
-# 0.0.0.0
-	empty		const[0x00000000, int32be]
-# 127.0.0.1
-	loopback	const[0x7f000001, int32be]
-# 255.255.255.255
-	broadcast	const[0xffffffff, int32be]
-}
-
-in6_addr_empty {
-	a0		const[0, int64be]
-	a1		const[0, int64be]
-}
-
-in6_addr_loopback {
-	a0		const[0, int64be]
-	a1		const[1, int64be]
-}
-
-in6_addr [
-	empty		in6_addr_empty
-	loopback	in6_addr_loopback
-]
-
-ipv6_mreq {
-	multi	in6_addr
-	ifindex	int32
-}
-
 fiemap {
 	start	int64
 	len	int64
@@ -1071,7 +852,7 @@ fiemap_extent {
 }
 
 uffdio_api {
-	api	const[170, int64]
+	api	const[UFFD_API, int64]
 	featur	const[0, int64]
 	ioctls	const[0, int64]
 }
@@ -1132,7 +913,7 @@ timerfd_create_flags = TFD_NONBLOCK, TFD_CLOEXEC
 timerfd_settime_flags = TFD_TIMER_ABSTIME
 clock_type = CLOCK_REALTIME, CLOCK_REALTIME_COARSE, CLOCK_MONOTONIC, CLOCK_MONOTONIC_COARSE, CLOCK_MONOTONIC_RAW, CLOCK_BOOTTIME, CLOCK_PROCESS_CPUTIME_ID, CLOCK_THREAD_CPUTIME_ID
 lio_opcode = IOCB_CMD_PREAD, IOCB_CMD_PWRITE, IOCB_CMD_FSYNC, IOCB_CMD_FDSYNC, IOCB_CMD_NOOP, IOCB_CMD_PREADV, IOCB_CMD_PWRITEV
-iocb_flags = IOCB_FLAG_RESFD
+iocb_flags = 0, IOCB_FLAG_RESFD
 iocb_key = 0
 sigev_notify = SIGEV_NONE, SIGEV_SIGNAL, SIGEV_THREAD, SIGEV_THREAD_ID
 cap_version = 0x19980330, 0x20071026, 0x20080522
@@ -1146,16 +927,8 @@ prctl_mm_option = PR_SET_MM_START_CODE, PR_SET_MM_END_CODE, PR_SET_MM_START_DATA
 arch_prctl_code = ARCH_SET_FS, ARCH_GET_FS, ARCH_SET_GS, ARCH_GET_GS
 epoll_flags = EPOLL_CLOEXEC
 epoll_op = EPOLL_CTL_ADD, EPOLL_CTL_MOD, EPOLL_CTL_DEL
-epoll_ev =  POLLIN, POLLOUT, POLLRDHUP, POLLPRI, POLLERR, POLLHUP, EPOLLET, EPOLLONESHOT
-msgget_flags = IPC_CREAT, IPC_EXCL, S_IRUSR, S_IWUSR, S_IXUSR, S_IRGRP, S_IWGRP, S_IXGRP, S_IROTH, S_IWOTH, S_IXOTH
-msg_flags = IPC_NOWAIT, MSG_EXCEPT, MSG_NOERROR
-msgctl_cmd = IPC_STAT, IPC_SET, IPC_RMID, IPC_INFO, MSG_INFO, MSG_STAT
-semget_flags = IPC_CREAT, IPC_EXCL, S_IRUSR, S_IWUSR, S_IXUSR, S_IRGRP, S_IWGRP, S_IXGRP, S_IROTH, S_IWOTH, S_IXOTH
-semop_flags = IPC_NOWAIT, SEM_UNDO
-semctl_cmd = IPC_STAT, IPC_SET, IPC_RMID, IPC_INFO, SEM_INFO, SEM_STAT, GETALL, GETNCNT, GETPID, GETVAL, GETZCNT, SETALL, SETVAL
-shmget_flags = IPC_CREAT, IPC_EXCL, SHM_HUGETLB, SHM_NORESERVE, S_IRUSR, S_IWUSR, S_IXUSR, S_IRGRP, S_IWGRP, S_IXGRP, S_IROTH, S_IWOTH, S_IXOTH
-shmat_flags = SHM_RND, SHM_RDONLY, SHM_REMAP
-shmctl_cmd = IPC_STAT, IPC_SET, IPC_RMID, IPC_INFO, SHM_INFO, SHM_STAT, SHM_LOCK, SHM_UNLOCK
+epoll_ev =  POLLIN, POLLOUT, POLLRDHUP, POLLPRI, POLLERR, POLLHUP, EPOLLET, EPOLLONESHOT, EPOLLEXCLUSIVE, EPOLLWAKEUP
+pollfd_events = POLLIN, POLLPRI, POLLOUT, POLLERR, POLLHUP, POLLNVAL, POLLRDNORM, POLLRDBAND, POLLWRNORM, POLLWRBAND, POLLMSG, POLLREMOVE, POLLRDHUP, POLLFREE, POLL_BUSY_LOOP
 mknod_mode = S_IFREG, S_IFCHR, S_IFBLK, S_IFIFO, S_IFSOCK, S_IRUSR, S_IWUSR, S_IXUSR, S_IRGRP, S_IWGRP, S_IXGRP, S_IROTH, S_IWOTH, S_IXOTH
 fchownat_flags = AT_EMPTY_PATH, AT_SYMLINK_NOFOLLOW
 fallocate_mode = 0, FALLOC_FL_KEEP_SIZE, FALLOC_FL_PUNCH_HOLE
@@ -1167,7 +940,7 @@ seccomp_op = SECCOMP_SET_MODE_STRICT, SECCOMP_SET_MODE_FILTER
 seccomp_flags = 0, SECCOMP_FILTER_FLAG_TSYNC
 name_to_handle_at_flags = AT_EMPTY_PATH, AT_SYMLINK_FOLLOW
 mq_open_flags = O_RDONLY, O_WRONLY, O_RDWR, O_NONBLOCK, O_CREAT, O_EXCL, O_CREAT
-mount_flags = MS_BIND, MS_DIRSYNC, MS_MANDLOCK, MS_MOVE, MS_NOATIME, MS_NODEV, MS_NODIRATIME, MS_NOEXEC, MS_NOSUID, MS_RDONLY, MS_RELATIME, MS_REMOUNT, MS_SILENT, MS_STRICTATIME, MS_SYNCHRONOUS
+mount_flags = MS_BIND, MS_DIRSYNC, MS_MANDLOCK, MS_MOVE, MS_NOATIME, MS_NODEV, MS_NODIRATIME, MS_NOEXEC, MS_NOSUID, MS_RDONLY, MS_RELATIME, MS_REMOUNT, MS_SILENT, MS_STRICTATIME, MS_SYNCHRONOUS, MS_REC, MS_POSIXACL, MS_UNBINDABLE, MS_PRIVATE, MS_SLAVE, MS_SHARED, MS_I_VERSION, MS_LAZYTIME
 umount_flags = MNT_FORCE, MNT_DETACH, MNT_EXPIRE, UMOUNT_NOFOLLOW
 finit_module_flags = MODULE_INIT_IGNORE_MODVERSIONS, MODULE_INIT_IGNORE_VERMAGIC
 delete_module_flags = O_NONBLOCK, O_TRUNC

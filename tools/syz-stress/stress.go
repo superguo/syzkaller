@@ -4,10 +4,8 @@
 package main
 
 import (
-	"archive/zip"
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"math/rand"
 	"os"
 	"regexp"
@@ -16,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/syzkaller/db"
 	"github.com/google/syzkaller/host"
 	"github.com/google/syzkaller/ipc"
 	. "github.com/google/syzkaller/log"
@@ -24,11 +23,12 @@ import (
 )
 
 var (
-	flagCorpus   = flag.String("corpus", "", "zip file with corpus")
+	flagCorpus   = flag.String("corpus", "", "corpus database")
 	flagExecutor = flag.String("executor", "./syz-executor", "path to executor binary")
 	flagOutput   = flag.Bool("output", false, "print executor output to console")
 	flagProcs    = flag.Int("procs", 2*runtime.NumCPU(), "number of parallel processes")
 	flagLogProg  = flag.Bool("logprog", false, "print programs before execution")
+	flagGenerate = flag.Bool("generate", true, "generate new programs, otherwise only mutate corpus")
 
 	failedRe = regexp.MustCompile("runtime error: |panic: |Panic: ")
 
@@ -42,6 +42,9 @@ func main() {
 	flag.Parse()
 	corpus := readCorpus()
 	Logf(0, "parsed %v programs", len(corpus))
+	if !*flagGenerate && len(corpus) == 0 {
+		Fatalf("nothing to mutate (-generate=false and no corpus)")
+	}
 
 	calls := buildCallList()
 	prios := prog.CalculatePriorities(corpus)
@@ -63,7 +66,7 @@ func main() {
 			rnd := rand.New(rs)
 			for i := 0; ; i++ {
 				var p *prog.Prog
-				if len(corpus) == 0 || i%4 != 0 {
+				if *flagGenerate && len(corpus) == 0 || i%4 != 0 {
 					p = prog.Generate(rs, programLength, ct)
 					execute(pid, env, p)
 					p.Mutate(rs, programLength, ct, corpus)
@@ -98,7 +101,7 @@ func execute(pid int, env *ipc.Env, p *prog.Prog) {
 		outMu.Unlock()
 	}
 
-	output, _, _, failed, hanged, err := env.Exec(p)
+	output, _, failed, hanged, err := env.Exec(p, false, false)
 	if err != nil {
 		fmt.Printf("failed to execute executor: %v\n", err)
 	}
@@ -115,28 +118,18 @@ func readCorpus() []*prog.Prog {
 	if *flagCorpus == "" {
 		return nil
 	}
-	zipr, err := zip.OpenReader(*flagCorpus)
+	db, err := db.Open(*flagCorpus)
 	if err != nil {
-		Fatalf("failed to open bin file: %v", err)
+		Fatalf("failed to open corpus database: %v", err)
 	}
 	var progs []*prog.Prog
-	for _, zipf := range zipr.File {
-		r, err := zipf.Open()
-		if err != nil {
-			Fatalf("failed to uzip file from input archive: %v", err)
-		}
-		data, err := ioutil.ReadAll(r)
-		if err != nil {
-			Fatalf("failed to read corpus file: %v", err)
-		}
-		p, err := prog.Deserialize(data)
+	for _, rec := range db.Records {
+		p, err := prog.Deserialize(rec.Val)
 		if err != nil {
 			Fatalf("failed to deserialize corpus program: %v", err)
 		}
 		progs = append(progs, p)
-		r.Close()
 	}
-	zipr.Close()
 	return progs
 }
 

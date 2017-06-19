@@ -48,7 +48,7 @@ upgrade:
 
 extract: bin/syz-extract
 	LINUX=$(LINUX) LINUXBLD=$(LINUXBLD) ./extract.sh
-bin/syz-extract: ./syz-extract
+bin/syz-extract: syz-extract/*.go sysparser/*.go
 	go build -o $@ ./syz-extract
 
 generate: bin/syz-sysgen
@@ -58,7 +58,7 @@ bin/syz-sysgen: sysgen/*.go sysparser/*.go
 
 format:
 	go fmt ./...
-	clang-format --style=file -i executor/*.cc executor/*.h
+	clang-format --style=file -i executor/*.cc executor/*.h tools/kcovtrace/*.c
 
 presubmit:
 	$(MAKE) generate

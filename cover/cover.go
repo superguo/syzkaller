@@ -101,6 +101,21 @@ func foreach(cov0, cov1 Cover, f func(uint32, uint32) uint32) Cover {
 	return res
 }
 
+// HasDifference returns true if cov0 has some coverage that is not present in cov1.
+// This is called on fuzzer hot path.
+func HasDifference(cov0, cov1 Cover) bool {
+	i1 := 0
+	for _, v0 := range cov0 {
+		for ; i1 < len(cov1) && cov1[i1] < v0; i1++ {
+		}
+		if i1 == len(cov1) || cov1[i1] > v0 {
+			return true
+		}
+		i1++
+	}
+	return false
+}
+
 // Minimize returns a minimal set of inputs that give the same coverage as the full corpus.
 func Minimize(corpus []Cover) []int {
 	inputs := make([]*minInput, len(corpus))
@@ -141,3 +156,27 @@ type minInputArray []*minInput
 func (a minInputArray) Len() int           { return len(a) }
 func (a minInputArray) Less(i, j int) bool { return len(a[i].cov) > len(a[j].cov) }
 func (a minInputArray) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+
+func SignalNew(base map[uint32]struct{}, signal []uint32) bool {
+	for _, s := range signal {
+		if _, ok := base[s]; !ok {
+			return true
+		}
+	}
+	return false
+}
+
+func SignalDiff(base map[uint32]struct{}, signal []uint32) (diff []uint32) {
+	for _, s := range signal {
+		if _, ok := base[s]; !ok {
+			diff = append(diff, s)
+		}
+	}
+	return
+}
+
+func SignalAdd(base map[uint32]struct{}, signal []uint32) {
+	for _, s := range signal {
+		base[s] = struct{}{}
+	}
+}

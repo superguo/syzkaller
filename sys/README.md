@@ -48,15 +48,17 @@ rest of the type-options are type-specific:
 		either a string value in quotes for constant strings (e.g. "foo"),
 		or a reference to string flags,
 		optionally followed by a buffer size (string values will be padded with \x00 to that size)
-	"filename": a file/link/dir name
+	"filename": a file/link/dir name, no pointer indirection implied, in most cases you want `ptr[in, filename]`
 	"fileoff": offset within a file
 	"len": length of another field (for array it is number of elements), type-options:
 		argname of the object
 	"bytesize": similar to "len", but always denotes the size in bytes, type-options:
 		argname of the object
-	"vma": a pointer to a set of pages (used as input for mmap/munmap/mremap/madvise)
+	"vma": a pointer to a set of pages (used as input for mmap/munmap/mremap/madvise), type-options:
+		optional number of pages (e.g. vma[7]), or a range of pages (e.g. vma[2-4])
 	"proc": per process int (see description below), type-options:
 		underlying type, value range start, how many values per process
+	"text16", "text32", "text64": machine code of the specified bitness
 ```
 flags/len/flags also have trailing underlying type type-option when used in structs/unions/pointers.
 
@@ -67,6 +69,27 @@ Flags are described as:
 or for string flags as:
 ```
 	flagname = "\"" literal "\"" ["," "\"" literal "\""]*
+```
+
+### Ints
+
+You can use `int8`, `int16`, `int32`, `int64` and `int64` to denote an integer of the corresponding size.
+
+By appending `be` suffix (like `int16be`) integers become big-endian.
+
+It's possible to specify range of values for an integer in the format of `int32[0:100]`.
+
+To denote a bitfield of size N use `int64:N`.
+
+It's possible to use these various kinds of ints as base types for `const`, `flags`, `len` and `proc`.
+
+```
+example_struct {
+	f0	int8			# random 1-byte integer
+	f1	const[0x42, int16be]	# const 2-byte integer with value 0x4200 (big-endian 0x42)
+	f2	int32[0:100]		# random 4-byte integer with values from 0 to 100 inclusive
+	f3	int64:20		# random 20-bit bitfield
+}
 ```
 
 ### Structs
@@ -108,6 +131,36 @@ resource sock_unix[sock]
 socket(...) sock
 accept(fd sock, ...) sock
 listen(fd sock, backlog int32)
+```
+
+### Length
+
+You can specify length of a particular field in struct or a named argument by using `len` and `bytesize` types, for example:
+```
+write(fd fd, buf buffer[in], count len[buf]) len[buf]
+
+sock_fprog {
+	len	len[filter, int16]
+	filter	ptr[in, array[sock_filter]]
+}
+```
+
+If `len`'s argument is a pointer (or a `buffer`), then the length of the pointee argument is used.
+
+To denote the length of a field in N-byte words use `bytesizeN`, possible values for N are 1, 2, 4 and 8.
+
+To denote the length of the parent struct, you can use `len[parent, int8]`.
+To denote the length of the higher level parent when structs are embedded into one another, you can specify the type name of the particular parent:
+```
+struct s1 {
+    f0      len[s2]  # length of s2
+}
+
+struct s2 {
+    f0      s1
+    f1      array[int32]
+}
+
 ```
 
 ### Proc

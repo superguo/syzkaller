@@ -22,6 +22,7 @@
 #include <linux/capability.h>
 #include <linux/if.h>
 #include <linux/if_tun.h>
+#include <linux/kvm.h>
 #include <linux/sched.h>
 #include <net/if_arp.h>
 
@@ -59,8 +60,9 @@ const int kRetryStatus = 69;
 // So call the syscall directly.
 __attribute__((noreturn)) void doexit(int status)
 {
+	volatile unsigned i;
 	syscall(__NR_exit_group, status);
-	for (volatile unsigned i = 0;; i++) {
+	for (i = 0;; i++) {
 	}
 }
 
@@ -130,8 +132,20 @@ __thread jmp_buf segv_env;
 
 static void segv_handler(int sig, siginfo_t* info, void* uctx)
 {
-	if (__atomic_load_n(&skip_segv, __ATOMIC_RELAXED))
+	// Generated programs can contain bad (unmapped/protected) addresses,
+	// which cause SIGSEGVs during copyin/copyout.
+	// This handler ignores such crashes to allow the program to proceed.
+	// We additionally opportunistically check that the faulty address
+	// is not within executable data region, because such accesses can corrupt
+	// output region and then fuzzer will fail on corrupted data.
+	uintptr_t addr = (uintptr_t)info->si_addr;
+	const uintptr_t prog_start = 1 << 20;
+	const uintptr_t prog_end = 100 << 20;
+	if (__atomic_load_n(&skip_segv, __ATOMIC_RELAXED) && (addr < prog_start || addr > prog_end)) {
+		debug("SIGSEGV on %p, skipping\n", addr);
 		_longjmp(segv_env, 1);
+	}
+	debug("SIGSEGV on %p, exiting\n", addr);
 	doexit(sig);
 	for (;;) {
 	}
@@ -154,6 +168,20 @@ static void install_segv_handler()
 			__VA_ARGS__;                                 \
 		}                                                    \
 		__atomic_fetch_sub(&skip_segv, 1, __ATOMIC_SEQ_CST); \
+	}
+
+#define BITMASK_LEN(type, bf_len) (type)((1ull << (bf_len)) - 1)
+
+#define BITMASK_LEN_OFF(type, bf_off, bf_len) (type)(BITMASK_LEN(type, (bf_len)) << (bf_off))
+
+#define STORE_BY_BITMASK(type, addr, val, bf_off, bf_len)                         \
+	if ((bf_off) == 0 && (bf_len) == 0) {                                     \
+		*(type*)(addr) = (type)(val);                                     \
+	} else {                                                                  \
+		type new_val = *(type*)(addr);                                    \
+		new_val &= ~BITMASK_LEN_OFF(type, (bf_off), (bf_len));            \
+		new_val |= ((type)(val)&BITMASK_LEN(type, (bf_len))) << (bf_off); \
+		*(type*)(addr) = new_val;                                         \
 	}
 
 #ifdef __NR_syz_emit_ethernet
@@ -183,12 +211,14 @@ static void execute_command(const char* format, ...)
 {
 	va_list args;
 	char command[COMMAND_MAX_LEN];
+	int rv;
 
 	va_start(args, format);
 
 	vsnprintf_check(command, sizeof(command), format, args);
-	if (system(command) < 0)
-		fail("tun: command \"%s\" failed", &command[0]);
+	rv = system(command);
+	if (rv != 0)
+		fail("tun: command \"%s\" failed with code %d", &command[0], rv);
 
 	va_end(args);
 }
@@ -202,22 +232,17 @@ int tunfd = -1;
 #define LOCAL_MAC "aa:aa:aa:aa:aa:%02hx"
 #define REMOTE_MAC "bb:bb:bb:bb:bb:%02hx"
 
-#define LOCAL_IPV4 "192.168.%d.170"
-#define REMOTE_IPV4 "192.168.%d.187"
+#define LOCAL_IPV4 "172.20.%d.170"
+#define REMOTE_IPV4 "172.20.%d.187"
 
 #define LOCAL_IPV6 "fd00::%02hxaa"
 #define REMOTE_IPV6 "fd00::%02hxbb"
 
 static void initialize_tun(uint64_t pid)
 {
-	if (getuid() != 0)
-		return;
-
 	if (pid >= MAX_PIDS)
 		fail("tun: no more than %d executors", MAX_PIDS);
-	// IP addresses like 192.168.0.1/192.168.1.1 are often used for routing between VM and the host.
-	// Offset our IP addresses to start from 192.168.218.0 to reduce potential conflicts.
-	int id = pid + 250 - MAX_PIDS;
+	int id = pid;
 
 	tunfd = open("/dev/net/tun", O_RDWR);
 	if (tunfd == -1)
@@ -256,6 +281,12 @@ static void initialize_tun(uint64_t pid)
 	execute_command("ip link set %s up", iface);
 }
 
+static void setup_tun(uint64_t pid, bool enable_tun)
+{
+	if (enable_tun)
+		initialize_tun(pid);
+}
+
 static uintptr_t syz_emit_ethernet(uintptr_t a0, uintptr_t a1)
 {
 	if (tunfd < 0)
@@ -280,7 +311,7 @@ static uintptr_t syz_open_dev(uintptr_t a0, uintptr_t a1, uintptr_t a2)
 		// syz_open_dev(dev strconst, id intptr, flags flags[open_flags]) fd
 		char buf[1024];
 		char* hash;
-		strncpy(buf, (char*)a0, sizeof(buf));
+		NONFAILING(strncpy(buf, (char*)a0, sizeof(buf)));
 		buf[sizeof(buf) - 1] = 0;
 		while ((hash = strchr(buf, '#'))) {
 			*hash = '0' + (char)(a1 % 10); // 10 devices should be enough for everyone.
@@ -366,6 +397,14 @@ static uintptr_t syz_fuseblk_mount(uintptr_t a0, uintptr_t a1, uintptr_t a2, uin
 }
 #endif
 
+#ifdef __NR_syz_kvm_setup_cpu
+#if defined(__x86_64__)
+#include "common_kvm_amd64.h"
+#elif defined(__aarch64__)
+#include "common_kvm_arm64.h"
+#endif
+#endif // #ifdef __NR_syz_kvm_setup_cpu
+
 static uintptr_t execute_syscall(int nr, uintptr_t a0, uintptr_t a1, uintptr_t a2, uintptr_t a3, uintptr_t a4, uintptr_t a5, uintptr_t a6, uintptr_t a7, uintptr_t a8)
 {
 	switch (nr) {
@@ -395,10 +434,14 @@ static uintptr_t execute_syscall(int nr, uintptr_t a0, uintptr_t a1, uintptr_t a
 	case __NR_syz_emit_ethernet:
 		return syz_emit_ethernet(a0, a1);
 #endif
+#ifdef __NR_syz_kvm_setup_cpu
+	case __NR_syz_kvm_setup_cpu:
+		return syz_kvm_setup_cpu(a0, a1, a2, a3, a4, a5, a6, a7);
+#endif
 	}
 }
 
-static void setup_main_process(uint64_t pid, bool enable_tun)
+static void setup_main_process()
 {
 	// Don't need that SIGCANCEL/SIGSETXID glibc stuff.
 	// SIGCANCEL sent to main thread causes it to exit
@@ -409,11 +452,6 @@ static void setup_main_process(uint64_t pid, bool enable_tun)
 	syscall(SYS_rt_sigaction, 0x20, &sa, NULL, 8);
 	syscall(SYS_rt_sigaction, 0x21, &sa, NULL, 8);
 	install_segv_handler();
-
-#ifdef __NR_syz_emit_ethernet
-	if (enable_tun)
-		initialize_tun(pid);
-#endif
 
 	char tmpdir_template[] = "./syzkaller.XXXXXX";
 	char* tmpdir = mkdtemp(tmpdir_template);
@@ -450,25 +488,33 @@ static void sandbox_common()
 }
 
 #if defined(SYZ_EXECUTOR) || defined(SYZ_SANDBOX_NONE)
-static int do_sandbox_none()
+static int do_sandbox_none(int executor_pid, bool enable_tun)
 {
 	int pid = fork();
 	if (pid)
 		return pid;
+
 	sandbox_common();
+#ifdef __NR_syz_emit_ethernet
+	setup_tun(executor_pid, enable_tun);
+#endif
+
 	loop();
 	doexit(1);
 }
 #endif
 
 #if defined(SYZ_EXECUTOR) || defined(SYZ_SANDBOX_SETUID)
-static int do_sandbox_setuid()
+static int do_sandbox_setuid(int executor_pid, bool enable_tun)
 {
 	int pid = fork();
 	if (pid)
 		return pid;
 
 	sandbox_common();
+#ifdef __NR_syz_emit_ethernet
+	setup_tun(executor_pid, enable_tun);
+#endif
 
 	const int nobody = 65534;
 	if (setgroups(0, NULL))
@@ -486,6 +532,8 @@ static int do_sandbox_setuid()
 #if defined(SYZ_EXECUTOR) || defined(SYZ_SANDBOX_NAMESPACE)
 static int real_uid;
 static int real_gid;
+static int epid;
+static bool etun;
 __attribute__((aligned(64 << 10))) static char sandbox_stack[1 << 20];
 
 static bool write_file(const char* file, const char* what, ...)
@@ -519,6 +567,12 @@ static int namespace_sandbox_proc(void* arg)
 		fail("write of /proc/self/uid_map failed");
 	if (!write_file("/proc/self/gid_map", "0 %d 1\n", real_gid))
 		fail("write of /proc/self/gid_map failed");
+
+#ifdef __NR_syz_emit_ethernet
+	// For sandbox namespace we setup tun after initializing uid mapping,
+	// otherwise ip commands fail.
+	setup_tun(epid, etun);
+#endif
 
 	if (mkdir("./syz-tmp", 0777))
 		fail("mkdir(syz-tmp) failed");
@@ -567,10 +621,12 @@ static int namespace_sandbox_proc(void* arg)
 	doexit(1);
 }
 
-static int do_sandbox_namespace()
+static int do_sandbox_namespace(int executor_pid, bool enable_tun)
 {
 	real_uid = getuid();
 	real_gid = getgid();
+	epid = executor_pid;
+	etun = enable_tun;
 	mprotect(sandbox_stack, 4096, PROT_NONE); // to catch stack underflows
 	return clone(namespace_sandbox_proc, &sandbox_stack[sizeof(sandbox_stack) - 8],
 		     CLONE_NEWUSER | CLONE_NEWPID | CLONE_NEWUTS | CLONE_NEWNET, NULL);
@@ -693,7 +749,6 @@ void loop()
 		uint64_t start = current_time_ms();
 		for (;;) {
 			int res = waitpid(-1, &status, __WALL | WNOHANG);
-			int errno0 = errno;
 			if (res == pid)
 				break;
 			usleep(1000);

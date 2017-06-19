@@ -73,6 +73,26 @@ IP: [<ffffffff810a376f>] __call_rcu.constprop.76+0x1f/0x280 kernel/rcu/tree.c:30
 `: `general protection fault in logfs_init_inode`,
 
 		`
+general protection fault: 0000 [#1] SMP KASAN
+Dumping ftrace buffer:
+   (ftrace buffer empty)
+Modules linked in:
+CPU: 0 PID: 27388 Comm: syz-executor5 Not tainted 4.10.0-rc6+ #117
+Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS Bochs 01/01/2011
+task: ffff88006252db40 task.stack: ffff880062090000
+RIP: 0010:__ip_options_echo+0x120a/0x1770
+RSP: 0018:ffff880062097530 EFLAGS: 00010206
+RAX: dffffc0000000000 RBX: ffff880062097910 RCX: 0000000000000000
+RDX: 0000000000000003 RSI: ffffffff83988dca RDI: 0000000000000018
+RBP: ffff8800620976a0 R08: ffff88006209791c R09: ffffed000c412f26
+R10: 0000000000000004 R11: ffffed000c412f25 R12: ffff880062097900
+R13: ffff88003a8c0a6c R14: 1ffff1000c412eb3 R15: 000000000000000d
+FS:  00007fd61b443700(0000) GS:ffff88003ec00000(0000) knlGS:0000000000000000
+CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+CR2: 000000002095f000 CR3: 0000000062876000 CR4: 00000000000006f0
+`: `general protection fault in __ip_options_echo`,
+
+		`
 ==================================================================
 BUG: KASAN: slab-out-of-bounds in memcpy+0x1d/0x40 at addr ffff88003a6bd110
 Read of size 8 by task a.out/6260
@@ -333,6 +353,26 @@ sp : c23e1db0  ip : c3cf8848  fp : c23e1df4
 `: `divide error in snd_hrtimer_callback`,
 
 		`
+divide error: 0000 [#1] SMP KASAN
+Dumping ftrace buffer:
+   (ftrace buffer empty)
+Modules linked in:
+CPU: 2 PID: 5664 Comm: syz-executor5 Not tainted 4.10.0-rc6+ #122
+Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS Bochs 01/01/2011
+task: ffff88003a46adc0 task.stack: ffff880036a00000
+RIP: 0010:__tcp_select_window+0x6db/0x920
+RSP: 0018:ffff880036a07638 EFLAGS: 00010212
+RAX: 0000000000000480 RBX: ffff880036a077d0 RCX: ffffc900030db000
+RDX: 0000000000000000 RSI: 0000000000000000 RDI: ffff88003809c3b5
+RBP: ffff880036a077f8 R08: ffff880039de5dc0 R09: 0000000000000000
+R10: 0000000000000000 R11: 0000000000000000 R12: 0000000000000480
+R13: 0000000000000000 R14: ffff88003809bb00 R15: 0000000000000000
+FS:  00007f35ecf32700(0000) GS:ffff88006de00000(0000) knlGS:0000000000000000
+CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+CR2: 00000000205fb000 CR3: 0000000032467000 CR4: 00000000000006e0
+`: `divide error in __tcp_select_window`,
+
+		`
 unreferenced object 0xffff880039a55260 (size 64): 
   comm "executor", pid 11746, jiffies 4298984475 (age 16.078s) 
   hex dump (first 32 bytes): 
@@ -493,6 +533,14 @@ INFO: Stall ended before state dump start
 		`
 WARNING: /etc/ssh/moduli does not exist, using fixed modulus
 `: ``,
+
+		`
+[   92.396607] APIC base relocation is unsupported by KVM
+[   95.445015] INFO: NMI handler (perf_event_nmi_handler) took too long to run: 1.356 msecs
+[   95.445015] perf: interrupt took too long (3985 > 3976), lowering kernel.perf_event_max_sample_rate to 50000
+`: ``,
+
+		`[   92.396607] general protection fault: 0000 [#1] [ 387.811073] audit: type=1326 audit(1486238739.637:135): auid=4294967295 uid=0 gid=0 ses=4294967295 pid=10020 comm="syz-executor1" exe="/root/syz-executor1" sig=31 arch=c000003e syscall=202 compat=0 ip=0x44fad9 code=0x0`: `general protection fault: 0000 [#1] [ 387.811073] audit: type=1326 audit(1486238739.637:135): auid=4294967295 uid=0 gid=0 ses=4294967295 pid=10020 comm="syz-executor1" exe="/root/s`,
 	}
 	for log, crash := range tests {
 		if strings.Index(log, "\r\n") != -1 {
@@ -565,6 +613,41 @@ func TestIgnores(t *testing.T) {
 	}
 	if desc, _, _, _ := Parse([]byte(log), ignores3); desc != "" {
 		t.Fatalf("found `%v`, should be ignored", desc)
+	}
+}
+
+func TestParseText(t *testing.T) {
+	tests := map[string]string{
+		`mmap(&(0x7f00008dd000/0x1000)=nil, (0x1000), 0x3, 0x32, 0xffffffffffffffff, 0x0)
+getsockopt$NETROM_N2(r2, 0x103, 0x3, &(0x7f00008de000-0x4)=0x1, &(0x7f00008dd000)=0x4)
+[  522.560667] nla_parse: 5 callbacks suppressed
+[  522.565344] netlink: 3 bytes leftover after parsing attributes in process 'syz-executor5'.
+[  536.429346] NMI watchdog: BUG: soft lockup - CPU#1 stuck for 11s! [syz-executor7:16813]
+mmap(&(0x7f0000557000/0x2000)=nil, (0x2000), 0x1, 0x11, r2, 0x1b)
+[  536.437530] Modules linked in:
+[  536.440808] CPU: 1 PID: 16813 Comm: syz-executor7 Not tainted 4.3.5-smp-DEV #119`: `NMI watchdog: BUG: soft lockup - CPU#1 stuck for 11s! [syz-executor7:16813]
+Modules linked in:
+CPU: 1 PID: 16813 Comm: syz-executor7 Not tainted 4.3.5-smp-DEV #119
+`,
+
+		// Raw 'dmesg -r' and /proc/kmsg output.
+		`<6>[   85.501187] WARNING: foo
+<6>[   85.501187] nouveau  [     DRM] suspending kernel object tree...
+executing program 1:
+<6>[   85.525111] nouveau  [     DRM] nouveau suspended
+<14>[   85.912347] init: computing context for service 'clear-bcb'`: `WARNING: foo
+nouveau  [     DRM] suspending kernel object tree...
+nouveau  [     DRM] nouveau suspended
+init: computing context for service 'clear-bcb'
+`,
+	}
+	for log, text0 := range tests {
+		if desc, text, _, _ := Parse([]byte(log), nil); string(text) != text0 {
+			t.Logf("log:\n%s", log)
+			t.Logf("want text:\n%s", text0)
+			t.Logf("got text:\n%s", text)
+			t.Fatalf("bad text, desc: '%v'", desc)
+		}
 	}
 }
 

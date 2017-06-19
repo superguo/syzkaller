@@ -9,6 +9,8 @@ import (
 	"github.com/google/syzkaller/sys"
 )
 
+var debug = false // enabled in tests
+
 type validCtx struct {
 	args map[*Arg]bool
 	uses map[*Arg]*Arg
@@ -54,6 +56,9 @@ func (c *Call) validate(ctx *validCtx) error {
 		if arg.Type.Name() != typ.Name() {
 			return fmt.Errorf("syscall %v: type name mismatch: %v vs %v", c.Meta.Name, arg.Type.Name(), typ.Name())
 		}
+		if arg.Type.FieldName() != typ.FieldName() {
+			return fmt.Errorf("syscall %v: field name mismatch: %v vs %v", c.Meta.Name, arg.Type.FieldName(), typ.FieldName())
+		}
 		if arg.Type.Dir() == sys.DirOut {
 			if (arg.Val != 0 && arg.Val != arg.Type.Default()) || arg.AddrPage != 0 || arg.AddrOffset != 0 {
 				// We generate output len arguments, which makes sense
@@ -96,6 +101,17 @@ func (c *Call) validate(ctx *validCtx) error {
 		case *sys.ProcType:
 			if arg.Val >= uintptr(typ1.ValuesPerProc) {
 				return fmt.Errorf("syscall %v: per proc arg '%v' has bad value '%v'", c.Meta.Name, typ.Name(), arg.Val)
+			}
+		case *sys.BufferType:
+			switch typ1.Kind {
+			case sys.BufferString:
+				if typ1.Length != 0 && len(arg.Data) != int(typ1.Length) {
+					return fmt.Errorf("syscall %v: string arg '%v' has size %v, which should be %v", c.Meta.Name, typ.Name(), len(arg.Data), typ1.Length)
+				}
+			}
+		case *sys.CsumType:
+			if arg.Val != 0 {
+				return fmt.Errorf("syscall %v: csum arg '%v' has nonzero value %v", c.Meta.Name, typ.Name(), arg.Val)
 			}
 		}
 		switch arg.Kind {

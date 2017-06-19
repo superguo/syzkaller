@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"io/ioutil"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -48,6 +49,9 @@ func isSupported(kallsyms []byte, c *sys.Call) bool {
 	}
 	if strings.HasPrefix(c.Name, "open$") {
 		return isSupportedOpen(c)
+	}
+	if strings.HasPrefix(c.Name, "openat$") {
+		return isSupportedOpenAt(c)
 	}
 	if len(kallsyms) == 0 {
 		return true
@@ -92,9 +96,15 @@ func isSupportedSyzkall(c *sys.Call) bool {
 	case "syz_emit_ethernet":
 		_, err := os.Stat("/dev/net/tun")
 		return err == nil && syscall.Getuid() == 0
-	default:
-		panic("unknown syzkall: " + c.Name)
+	case "syz_kvm_setup_cpu":
+		switch c.Name {
+		case "syz_kvm_setup_cpu$x86":
+			return runtime.GOARCH == "amd64" || runtime.GOARCH == "386"
+		case "syz_kvm_setup_cpu$arm64":
+			return runtime.GOARCH == "arm64"
+		}
 	}
+	panic("unknown syzkall: " + c.Name)
 }
 
 func isSupportedSocket(c *sys.Call) bool {
@@ -112,6 +122,18 @@ func isSupportedSocket(c *sys.Call) bool {
 
 func isSupportedOpen(c *sys.Call) bool {
 	fname, ok := extractStringConst(c.Args[0])
+	if !ok {
+		return true
+	}
+	fd, err := syscall.Open(fname, syscall.O_RDONLY, 0)
+	if fd != -1 {
+		syscall.Close(fd)
+	}
+	return err == nil
+}
+
+func isSupportedOpenAt(c *sys.Call) bool {
+	fname, ok := extractStringConst(c.Args[1])
 	if !ok {
 		return true
 	}

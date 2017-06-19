@@ -190,7 +190,11 @@ func (inst *instance) Boot() error {
 	}
 	if inst.cfg.Kernel != "" {
 		cmdline := "console=ttyS0 vsyscall=native rodata=n oops=panic panic_on_warn=1 panic=86400" +
-			" ftrace_dump_on_oops=orig_cpu earlyprintk=serial slub_debug=UZ net.ifnames=0 biosdevname=0 "
+			" ftrace_dump_on_oops=orig_cpu earlyprintk=serial slub_debug=UZ net.ifnames=0 biosdevname=0 " +
+			" kvm-intel.nested=1 kvm-intel.unrestricted_guest=1 kvm-intel.vmm_exclusive=1 kvm-intel.fasteoi=1 " +
+			" kvm-intel.ept=1 kvm-intel.flexpriority=1 " +
+			" kvm-intel.vpid=1 kvm-intel.emulate_invalid_guest_state=1 kvm-intel.eptad=1 " +
+			" kvm-intel.enable_shadow_vmcs=1 kvm-intel.pml=1 kvm-intel.enable_apicv=1 "
 		if inst.cfg.Image == "9p" {
 			cmdline += "root=/dev/root rootfstype=9p rootflags=trans=virtio,version=9p2000.L,cache=loose "
 			cmdline += "init=" + filepath.Join(inst.cfg.Workdir, "init.sh") + " "
@@ -247,12 +251,12 @@ func (inst *instance) Boot() error {
 	}()
 
 	// Wait for ssh server to come up.
-	time.Sleep(10 * time.Second)
+	time.Sleep(5 * time.Second)
 	start := time.Now()
 	for {
-		c, err := net.DialTimeout("tcp", fmt.Sprintf("localhost:%v", inst.port), 3*time.Second)
+		c, err := net.DialTimeout("tcp", fmt.Sprintf("localhost:%v", inst.port), 1*time.Second)
 		if err == nil {
-			c.SetDeadline(time.Now().Add(3 * time.Second))
+			c.SetDeadline(time.Now().Add(1 * time.Second))
 			var tmp [1]byte
 			n, err := c.Read(tmp[:])
 			c.Close()
@@ -350,7 +354,14 @@ func (inst *instance) Run(timeout time.Duration, stop <-chan bool, command strin
 		case <-stop:
 			signal(vm.TimeoutErr)
 		case err := <-inst.merger.Err:
+			cmd.Process.Kill()
+			if cmdErr := cmd.Wait(); cmdErr == nil {
+				// If the command exited successfully, we got EOF error from merger.
+				// But in this case no error has happened and the EOF is expected.
+				err = nil
+			}
 			signal(err)
+			return
 		}
 		cmd.Process.Kill()
 		cmd.Wait()
@@ -384,9 +395,17 @@ mount -t sysfs none /sys
 mount -t debugfs nodev /sys/kernel/debug/
 mount -t tmpfs none /tmp
 mount -t tmpfs none /var
+mount -t tmpfs none /run
 mount -t tmpfs none /etc
 mount -t tmpfs none /root
 touch /etc/fstab
+mkdir /etc/network
+mkdir /run/network
+printf 'auto lo\niface lo inet loopback\n\n' >> /etc/network/interfaces
+printf 'auto eth0\niface eth0 inet static\naddress 10.0.2.15\nnetmask 255.255.255.0\nnetwork 10.0.2.0\ngateway 10.0.2.1\nbroadcast 10.0.2.255\n\n' >> /etc/network/interfaces
+printf 'auto eth0\niface eth0 inet6 static\naddress fe80::5054:ff:fe12:3456/64\ngateway 2000:da8:203:612:0:3:0:1\n\n' >> /etc/network/interfaces
+ifup lo
+ifup eth0
 echo "root::0:0:root:/root:/bin/bash" > /etc/passwd
 mkdir -p /etc/ssh
 cp {{KEY}}.pub /root/
@@ -410,7 +429,6 @@ cat > /etc/ssh/sshd_config <<EOF
           RSAAuthentication yes
           PubkeyAuthentication yes
 EOF
-/sbin/dhclient eth0
 /usr/sbin/sshd -e -D
 /sbin/halt -f
 `

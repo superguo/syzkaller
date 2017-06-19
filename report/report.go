@@ -128,6 +128,7 @@ var oopses = []*oops{
 		[]*regexp.Regexp{
 			compile("INFO: lockdep is turned off"),
 			compile("INFO: Stall ended before state dump start"),
+			compile("INFO: NMI handler .* took too long to run"),
 		},
 	},
 	&oops{
@@ -145,6 +146,10 @@ var oopses = []*oops{
 		[]oopsFormat{
 			{
 				compile("general protection fault:(?:.*\\n)+?.*RIP: [0-9]+:{{PC}} +{{PC}} +{{FUNC}}"),
+				"general protection fault in %[1]v",
+			},
+			{
+				compile("general protection fault:(?:.*\\n)+?.*RIP: [0-9]+:{{FUNC}}"),
 				"general protection fault in %[1]v",
 			},
 		},
@@ -191,6 +196,10 @@ var oopses = []*oops{
 				compile("divide error: (?:.*\\n)+?.*RIP: [0-9]+:{{PC}} +{{PC}} +{{FUNC}}"),
 				"divide error in %[1]v",
 			},
+			{
+				compile("divide error: (?:.*\\n)+?.*RIP: [0-9]+:{{FUNC}}"),
+				"divide error in %[1]v",
+			},
 		},
 		[]*regexp.Regexp{},
 	},
@@ -199,6 +208,10 @@ var oopses = []*oops{
 		[]oopsFormat{
 			{
 				compile("invalid opcode: (?:.*\\n)+?.*RIP: [0-9]+:{{PC}} +{{PC}} +{{FUNC}}"),
+				"invalid opcode in %[1]v",
+			},
+			{
+				compile("invalid opcode: (?:.*\\n)+?.*RIP: [0-9]+:{{FUNC}}"),
 				"invalid opcode in %[1]v",
 			},
 		},
@@ -222,7 +235,7 @@ var oopses = []*oops{
 }
 
 var (
-	consoleOutputRe = regexp.MustCompile(`^\[ *[0-9]+\.[0-9]+\] `)
+	consoleOutputRe = regexp.MustCompile(`^(?:\<[0-9]+\>)?\[ *[0-9]+\.[0-9]+\] `)
 	questionableRe  = regexp.MustCompile(`(?:\[\<[0-9a-f]+\>\])? \? +[a-zA-Z0-9_.]+\+0x[0-9a-f]+/[0-9a-f]+`)
 	symbolizeRe     = regexp.MustCompile(`(?:\[\<(?:[0-9a-f]+)\>\])? +(?:[0-9]+:)?([a-zA-Z0-9_.]+)\+0x([0-9a-f]+)/0x([0-9a-f]+)`)
 	eoi             = []byte("<EOI>")
@@ -302,6 +315,11 @@ func Parse(output []byte, ignores []*regexp.Regexp) (desc string, text []byte, s
 	desc = extractDescription(output[start:], oops)
 	if len(desc) > 0 && desc[len(desc)-1] == '\r' {
 		desc = desc[:len(desc)-1]
+	}
+	// Corrupted/intermixed lines can be very long.
+	const maxDescLen = 180
+	if len(desc) > maxDescLen {
+		desc = desc[:maxDescLen]
 	}
 	return
 }

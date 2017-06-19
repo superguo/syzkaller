@@ -26,10 +26,25 @@ func TestTransitivelyEnabledCalls(t *testing.T) {
 	}
 	delete(calls, CallMap["epoll_create1"])
 	trans := TransitivelyEnabledCalls(calls)
-	if len(calls)-3 != len(trans) ||
-		trans[CallMap["epoll_ctl"]] ||
+	if len(calls)-5 != len(trans) ||
+		trans[CallMap["epoll_ctl$EPOLL_CTL_ADD"]] ||
+		trans[CallMap["epoll_ctl$EPOLL_CTL_MOD"]] ||
+		trans[CallMap["epoll_ctl$EPOLL_CTL_DEL"]] ||
 		trans[CallMap["epoll_wait"]] ||
 		trans[CallMap["epoll_pwait"]] {
 		t.Fatalf("epoll fd is not disabled")
+	}
+}
+
+func TestClockGettime(t *testing.T) {
+	calls := make(map[*Call]bool)
+	for _, c := range Calls {
+		calls[c] = true
+	}
+	// Removal of clock_gettime should disable all calls that accept timespec/timeval.
+	delete(calls, CallMap["clock_gettime"])
+	trans := TransitivelyEnabledCalls(calls)
+	if len(trans)+10 > len(calls) {
+		t.Fatalf("clock_gettime did not disable enough calls: before %v, after %v", len(calls), len(trans))
 	}
 }

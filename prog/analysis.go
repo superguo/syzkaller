@@ -150,67 +150,34 @@ func foreachArg(c *Call, f func(arg, base *Arg, parent *[]*Arg)) {
 	foreachArgArray(&c.Args, nil, f)
 }
 
-func generateSize(arg *Arg, lenType *sys.LenType) *Arg {
-	if arg == nil {
-		// Arg is an optional pointer, set size to 0.
-		return constArg(lenType, 0)
-	}
-
-	switch arg.Type.(type) {
-	case *sys.VmaType:
-		return pageSizeArg(lenType, arg.AddrPagesNum, 0)
-	case *sys.ArrayType:
-		if lenType.ByteSize {
-			return constArg(lenType, arg.Size())
-		} else {
-			return constArg(lenType, uintptr(len(arg.Inner)))
-		}
-	default:
-		return constArg(lenType, arg.Size())
-	}
-}
-
-func assignSizes(args []*Arg) {
-	// Create a map of args and calculate size of the whole struct.
-	argsMap := make(map[string]*Arg)
-	var parentSize uintptr
-	for _, arg := range args {
-		parentSize += arg.Size()
-		if sys.IsPad(arg.Type) {
-			continue
-		}
-		argsMap[arg.Type.Name()] = arg
-	}
-
-	// Fill in size arguments.
-	for _, arg := range args {
-		if arg = arg.InnerArg(); arg == nil {
-			continue // Pointer to optional len field, no need to fill in value.
-		}
-		if typ, ok := arg.Type.(*sys.LenType); ok {
-			if typ.Buf == "parent" {
-				arg.Val = parentSize
-				continue
+func foreachSubargOffset(arg *Arg, f func(arg *Arg, offset uintptr)) {
+	var rec func(*Arg, uintptr) uintptr
+	rec = func(arg1 *Arg, offset uintptr) uintptr {
+		switch arg1.Kind {
+		case ArgGroup:
+			var totalSize uintptr
+			for _, arg2 := range arg1.Inner {
+				size := rec(arg2, offset)
+				if arg2.Type.BitfieldLength() == 0 || arg2.Type.BitfieldLast() {
+					offset += size
+					totalSize += size
+				}
 			}
-
-			buf, ok := argsMap[typ.Buf]
-			if !ok {
-				panic(fmt.Sprintf("len field '%v' references non existent field '%v', argsMap: %+v",
-					typ.Name(), typ.Buf, argsMap))
+			if totalSize > arg1.Size() {
+				panic(fmt.Sprintf("bad group arg size %v, should be <= %v for %+v", totalSize, arg1.Size(), arg1))
 			}
-
-			*arg = *generateSize(buf.InnerArg(), typ)
+		case ArgUnion:
+			size := rec(arg1.Option, offset)
+			offset += size
+			if size > arg1.Size() {
+				panic(fmt.Sprintf("bad union arg size %v, should be <= %v for arg %+v with type %+v", size, arg1.Size(), arg1, arg1.Type))
+			}
+		default:
+			f(arg1, offset)
 		}
+		return arg1.Size()
 	}
-}
-
-func assignSizesCall(c *Call) {
-	assignSizes(c.Args)
-	foreachArg(c, func(arg, base *Arg, parent *[]*Arg) {
-		if _, ok := arg.Type.(*sys.StructType); ok {
-			assignSizes(arg.Inner)
-		}
-	})
+	rec(arg, 0)
 }
 
 func sanitizeCall(c *Call) {

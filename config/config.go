@@ -55,8 +55,9 @@ type Config struct {
 
 	Machine_Type string // GCE machine type (e.g. "n1-highcpu-2")
 
-	Cover bool // use kcov coverage (default: true)
-	Leak  bool // do memory leak checking
+	Cover     bool // use kcov coverage (default: true)
+	Leak      bool // do memory leak checking
+	Reproduce bool // reproduce, localize and minimize crashers (on by default)
 
 	Enable_Syscalls  []string
 	Disable_Syscalls []string
@@ -89,6 +90,7 @@ func parse(data []byte) (*Config, map[int]bool, error) {
 	}
 	cfg := new(Config)
 	cfg.Cover = true
+	cfg.Reproduce = true
 	cfg.Sandbox = "setuid"
 	if err := json.Unmarshal(data, cfg); err != nil {
 		return nil, nil, fmt.Errorf("failed to parse config file: %v", err)
@@ -174,6 +176,24 @@ func parse(data []byte) (*Config, map[int]bool, error) {
 		return nil, nil, fmt.Errorf("config param sandbox must contain one of none/setuid/namespace")
 	}
 
+	wd, err := os.Getwd()
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get wd: %v", err)
+	}
+	abs := func(path string) string {
+		if path != "" && !filepath.IsAbs(path) {
+			path = filepath.Join(wd, path)
+		}
+		return path
+	}
+	cfg.Workdir = abs(cfg.Workdir)
+	cfg.Kernel = abs(cfg.Kernel)
+	cfg.Vmlinux = abs(cfg.Vmlinux)
+	cfg.Syzkaller = abs(cfg.Syzkaller)
+	cfg.Initrd = abs(cfg.Initrd)
+	cfg.Sshkey = abs(cfg.Sshkey)
+	cfg.Bin = abs(cfg.Bin)
+
 	syscalls, err := parseSyscalls(cfg)
 	if err != nil {
 		return nil, nil, err
@@ -228,9 +248,8 @@ func parseSyscalls(cfg *Config) (map[int]bool, error) {
 			return nil, fmt.Errorf("unknown disabled syscall: %v", c)
 		}
 	}
-	// They will be generated anyway.
+	// mmap is used to allocate memory.
 	syscalls[sys.CallMap["mmap"].ID] = true
-	syscalls[sys.CallMap["clock_gettime"].ID] = true
 
 	return syscalls, nil
 }
@@ -242,6 +261,7 @@ func parseSuppressions(cfg *Config) error {
 		"panic: executor failed: pthread_create failed",
 		"panic: failed to create temp dir",
 		"fatal error: runtime: out of memory",
+		"fatal error: runtime: cannot allocate memory",
 		"fatal error: unexpected signal during runtime execution", // presubmably OOM turned into SIGBUS
 		"Out of memory: Kill process .* \\(syz-fuzzer\\)",
 		"lowmemorykiller: Killing 'syz-fuzzer'",
@@ -327,6 +347,7 @@ func checkUnknownFields(data []byte) (string, error) {
 		"Avd_Args",
 		"Procs",
 		"Cover",
+		"Reproduce",
 		"Sandbox",
 		"Leak",
 		"Enable_Syscalls",

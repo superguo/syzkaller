@@ -95,6 +95,8 @@ func (a *Arg) Value(pid int) uintptr {
 		return encodeValue(a.Val, typ.Size(), typ.BigEndian)
 	case *sys.LenType:
 		return encodeValue(a.Val, typ.Size(), typ.BigEndian)
+	case *sys.CsumType:
+		return encodeValue(a.Val, typ.Size(), typ.BigEndian)
 	case *sys.ProcType:
 		val := uintptr(typ.ValuesStart) + uintptr(typ.ValuesPerProc)*uintptr(pid) + a.Val
 		return encodeValue(val, typ.Size(), typ.BigEndian)
@@ -105,18 +107,32 @@ func (a *Arg) Value(pid int) uintptr {
 func (a *Arg) Size() uintptr {
 	switch typ := a.Type.(type) {
 	case *sys.IntType, *sys.LenType, *sys.FlagsType, *sys.ConstType,
-		*sys.ResourceType, *sys.VmaType, *sys.PtrType, *sys.ProcType:
+		*sys.ResourceType, *sys.VmaType, *sys.PtrType, *sys.ProcType, *sys.CsumType:
 		return typ.Size()
 	case *sys.BufferType:
 		return uintptr(len(a.Data))
 	case *sys.StructType:
 		var size uintptr
 		for _, fld := range a.Inner {
-			size += fld.Size()
+			if fld.Type.BitfieldLength() == 0 || fld.Type.BitfieldLast() {
+				size += fld.Size()
+			}
+		}
+		align := typ.Align()
+		if size%align != 0 {
+			if typ.Varlen() {
+				size += align - size%align
+			} else {
+				panic(fmt.Sprintf("struct %+v with type %+v has static size %v, which isn't aligned to %v", a, typ, size, align))
+			}
 		}
 		return size
 	case *sys.UnionType:
-		return a.Option.Size()
+		if !typ.Varlen() {
+			return typ.Size()
+		} else {
+			return a.Option.Size()
+		}
 	case *sys.ArrayType:
 		var size uintptr
 		for _, in := range a.Inner {

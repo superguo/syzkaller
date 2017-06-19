@@ -12,7 +12,6 @@ const ptrSize = 8
 type Call struct {
 	ID       int
 	NR       int // kernel syscall number
-	CallID   int
 	Name     string
 	CallName string
 	Args     []Type
@@ -29,11 +28,16 @@ const (
 
 type Type interface {
 	Name() string
+	FieldName() string
 	Dir() Dir
 	Optional() bool
 	Default() uintptr
+	Varlen() bool
 	Size() uintptr
 	Align() uintptr
+	BitfieldOffset() uintptr
+	BitfieldLength() uintptr
+	BitfieldLast() bool
 }
 
 func IsPad(t Type) bool {
@@ -45,6 +49,7 @@ func IsPad(t Type) bool {
 
 type TypeCommon struct {
 	TypeName   string
+	FldName    string // for struct fields and named args
 	ArgDir     Dir
 	IsOptional bool
 }
@@ -53,12 +58,32 @@ func (t *TypeCommon) Name() string {
 	return t.TypeName
 }
 
+func (t *TypeCommon) FieldName() string {
+	return t.FldName
+}
+
 func (t *TypeCommon) Optional() bool {
 	return t.IsOptional
 }
 
 func (t *TypeCommon) Default() uintptr {
 	return 0
+}
+
+func (t *TypeCommon) Varlen() bool {
+	return false
+}
+
+func (t *TypeCommon) BitfieldOffset() uintptr {
+	return 0
+}
+
+func (t *TypeCommon) BitfieldLength() uintptr {
+	return 0
+}
+
+func (t *TypeCommon) BitfieldLast() bool {
+	return false
 }
 
 func (t TypeCommon) Dir() Dir {
@@ -97,107 +122,39 @@ func (t *ResourceType) Align() uintptr {
 	return t.Desc.Type.Align()
 }
 
-type BufferKind int
-
-const (
-	BufferBlobRand BufferKind = iota
-	BufferBlobRange
-	BufferString
-	BufferFilename
-)
-
-type BufferType struct {
+type IntTypeCommon struct {
 	TypeCommon
-	Kind       BufferKind
-	RangeBegin uintptr // for BufferBlobRange kind
-	RangeEnd   uintptr // for BufferBlobRange kind
-	SubKind    string
-	Values     []string // possible values for BufferString kind
+	TypeSize    uintptr
+	BigEndian   bool
+	BitfieldOff uintptr
+	BitfieldLen uintptr
+	BitfieldLst bool
 }
 
-func (t *BufferType) Size() uintptr {
-	switch t.Kind {
-	case BufferString:
-		size := 0
-		for _, s := range t.Values {
-			if size != 0 && size != len(s) {
-				size = 0
-				break
-			}
-			size = len(s)
-		}
-		if size != 0 {
-			return uintptr(size)
-		}
-	case BufferBlobRange:
-		if t.RangeBegin == t.RangeEnd {
-			return t.RangeBegin
-		}
-	}
-	panic(fmt.Sprintf("buffer size is not statically known: %v", t.Name()))
-}
-
-func (t *BufferType) Align() uintptr {
-	return 1
-}
-
-type VmaType struct {
-	TypeCommon
-}
-
-func (t *VmaType) Size() uintptr {
-	return ptrSize
-}
-
-func (t *VmaType) Align() uintptr {
-	return t.Size()
-}
-
-type LenType struct {
-	TypeCommon
-	TypeSize  uintptr
-	BigEndian bool
-	ByteSize  bool // want size in bytes instead of array size
-	Buf       string
-}
-
-func (t *LenType) Size() uintptr {
+func (t *IntTypeCommon) Size() uintptr {
 	return t.TypeSize
 }
 
-func (t *LenType) Align() uintptr {
+func (t *IntTypeCommon) Align() uintptr {
 	return t.Size()
 }
 
-type FlagsType struct {
-	TypeCommon
-	TypeSize  uintptr
-	BigEndian bool
-	Vals      []uintptr
+func (t *IntTypeCommon) BitfieldOffset() uintptr {
+	return t.BitfieldOff
 }
 
-func (t *FlagsType) Size() uintptr {
-	return t.TypeSize
+func (t *IntTypeCommon) BitfieldLength() uintptr {
+	return t.BitfieldLen
 }
 
-func (t *FlagsType) Align() uintptr {
-	return t.Size()
+func (t *IntTypeCommon) BitfieldLast() bool {
+	return t.BitfieldLst
 }
 
 type ConstType struct {
-	TypeCommon
-	TypeSize  uintptr
-	BigEndian bool
-	Val       uintptr
-	IsPad     bool
-}
-
-func (t *ConstType) Size() uintptr {
-	return t.TypeSize
-}
-
-func (t *ConstType) Align() uintptr {
-	return t.Size()
+	IntTypeCommon
+	Val   uintptr
+	IsPad bool
 }
 
 type IntKind int
@@ -210,36 +167,121 @@ const (
 )
 
 type IntType struct {
-	TypeCommon
-	TypeSize   uintptr
-	BigEndian  bool
+	IntTypeCommon
 	Kind       IntKind
 	RangeBegin int64
 	RangeEnd   int64
 }
 
-func (t *IntType) Size() uintptr {
-	return t.TypeSize
+type FlagsType struct {
+	IntTypeCommon
+	Vals []uintptr
 }
 
-func (t *IntType) Align() uintptr {
-	return t.Size()
+type LenType struct {
+	IntTypeCommon
+	ByteSize uintptr // want size in multiple of bytes instead of array size
+	Buf      string
 }
 
 type ProcType struct {
-	TypeCommon
-	TypeSize      uintptr
-	BigEndian     bool
+	IntTypeCommon
 	ValuesStart   int64
 	ValuesPerProc uint64
 }
 
-func (t *ProcType) Size() uintptr {
-	return t.TypeSize
+type CsumKind int
+
+const (
+	CsumInet CsumKind = iota
+	CsumPseudo
+)
+
+type CsumType struct {
+	IntTypeCommon
+	Kind     CsumKind
+	Buf      string
+	Protocol uint64 // for CsumPseudo
 }
 
-func (t *ProcType) Align() uintptr {
+type VmaType struct {
+	TypeCommon
+	RangeBegin int64 // in pages
+	RangeEnd   int64
+}
+
+func (t *VmaType) Size() uintptr {
+	return ptrSize
+}
+
+func (t *VmaType) Align() uintptr {
 	return t.Size()
+}
+
+type BufferKind int
+
+const (
+	BufferBlobRand BufferKind = iota
+	BufferBlobRange
+	BufferString
+	BufferFilename
+	BufferText
+)
+
+type TextKind int
+
+const (
+	Text_x86_real TextKind = iota
+	Text_x86_16
+	Text_x86_32
+	Text_x86_64
+	Text_arm64
+)
+
+type BufferType struct {
+	TypeCommon
+	Kind       BufferKind
+	RangeBegin uintptr  // for BufferBlobRange kind
+	RangeEnd   uintptr  // for BufferBlobRange kind
+	Text       TextKind // for BufferText
+	SubKind    string
+	Values     []string // possible values for BufferString kind
+	Length     uintptr  // max string length for BufferString kind
+}
+
+func (t *BufferType) Varlen() bool {
+	switch t.Kind {
+	case BufferBlobRand:
+		return true
+	case BufferBlobRange:
+		return t.RangeBegin != t.RangeEnd
+	case BufferString:
+		return t.Length == 0
+	case BufferFilename:
+		return true
+	case BufferText:
+		return true
+	default:
+		panic("bad buffer kind")
+	}
+}
+
+func (t *BufferType) Size() uintptr {
+	if t.Varlen() {
+		panic(fmt.Sprintf("buffer size is not statically known: %v", t.Name()))
+	}
+	switch t.Kind {
+	case BufferString:
+		return t.Length
+	case BufferBlobRange:
+		return t.RangeBegin
+	default:
+		panic("bad buffer kind")
+	}
+}
+
+func (t *BufferType) Align() uintptr {
+	return 1
 }
 
 type ArrayKind int
@@ -257,11 +299,27 @@ type ArrayType struct {
 	RangeEnd   uintptr
 }
 
-func (t *ArrayType) Size() uintptr {
-	if t.RangeBegin == t.RangeEnd {
-		return t.RangeBegin * t.Type.Size()
+func (t *ArrayType) Varlen() bool {
+	switch t.Kind {
+	case ArrayRandLen:
+		return true
+	case ArrayRangeLen:
+		return t.RangeBegin != t.RangeEnd
+	default:
+		panic("bad array kind")
 	}
-	return 0 // for trailing embed arrays
+}
+
+func (t *ArrayType) Size() uintptr {
+	if t.Varlen() {
+		panic(fmt.Sprintf("array size is not statically known: %v", t.Name()))
+	}
+	switch t.Kind {
+	case ArrayRangeLen:
+		return t.RangeBegin * t.Type.Size()
+	default:
+		panic("bad array type")
+	}
 }
 
 func (t *ArrayType) Align() uintptr {
@@ -283,19 +341,42 @@ func (t *PtrType) Align() uintptr {
 
 type StructType struct {
 	TypeCommon
-	Fields []Type
-	padded bool
-	packed bool
-	align  uintptr
+	Fields         []Type
+	padded         bool
+	packed         bool
+	align          uintptr
+	varlen         bool
+	varlenAssigned bool
+}
+
+func (t *StructType) Varlen() bool {
+	if t.varlenAssigned {
+		return t.varlen
+	}
+	for _, f := range t.Fields {
+		if f.Varlen() {
+			t.varlen = true
+			t.varlenAssigned = true
+			return t.varlen
+		}
+	}
+	t.varlen = false
+	t.varlenAssigned = true
+	return t.varlen
 }
 
 func (t *StructType) Size() uintptr {
+	if t.Varlen() {
+		panic(fmt.Sprintf("struct size is not statically known: %v", t.Name()))
+	}
 	if !t.padded {
 		panic("struct is not padded yet")
 	}
 	var size uintptr
 	for _, f := range t.Fields {
-		size += f.Size()
+		if f.BitfieldLength() == 0 || f.BitfieldLast() {
+			size += f.Size()
+		}
 	}
 	return size
 }
@@ -303,6 +384,9 @@ func (t *StructType) Size() uintptr {
 func (t *StructType) Align() uintptr {
 	if t.align != 0 {
 		return t.align // overrided by user attribute
+	}
+	if t.packed {
+		return 1
 	}
 	var align uintptr
 	for _, f := range t.Fields {
@@ -316,12 +400,16 @@ func (t *StructType) Align() uintptr {
 type UnionType struct {
 	TypeCommon
 	Options []Type
-	varlen  bool
+	varlen  bool // provided by user
+}
+
+func (t *UnionType) Varlen() bool {
+	return t.varlen
 }
 
 func (t *UnionType) Size() uintptr {
-	if t.varlen {
-		panic("union size is not statically known")
+	if t.Varlen() {
+		panic(fmt.Sprintf("union size is not statically known: %v", t.Name()))
 	}
 	size := t.Options[0].Size()
 	for _, opt := range t.Options {
@@ -435,10 +523,8 @@ func TransitivelyEnabledCalls(enabled map[*Call]bool) map[*Call]bool {
 	}
 	for {
 		n := len(supported)
-		for c := range enabled {
-			if !supported[c] {
-				continue
-			}
+		haveGettime := supported[CallMap["clock_gettime"]]
+		for c := range supported {
 			canCreate := true
 			for _, res := range c.InputResources() {
 				noctors := true
@@ -452,6 +538,15 @@ func TransitivelyEnabledCalls(enabled map[*Call]bool) map[*Call]bool {
 					canCreate = false
 					break
 				}
+			}
+			// We need to support structs as resources,
+			// but for now we just special-case timespec/timeval.
+			if canCreate && !haveGettime {
+				ForeachType(c, func(typ Type) {
+					if a, ok := typ.(*StructType); ok && a.Dir() != DirOut && (a.Name() == "timespec" || a.Name() == "timeval") {
+						canCreate = false
+					}
+				})
 			}
 			if !canCreate {
 				delete(supported, c)
@@ -491,7 +586,7 @@ func ForeachType(meta *Call, f func(Type)) {
 				rec(opt)
 			}
 		case *ResourceType, *BufferType, *VmaType, *LenType,
-			*FlagsType, *ConstType, *IntType, *ProcType:
+			*FlagsType, *ConstType, *IntType, *ProcType, *CsumType:
 		default:
 			panic("unknown type")
 		}
@@ -505,10 +600,8 @@ func ForeachType(meta *Call, f func(Type)) {
 }
 
 var (
-	Calls     []*Call
-	CallCount int
-	CallMap   = make(map[string]*Call)
-	CallID    = make(map[string]int)
+	Calls   []*Call
+	CallMap = make(map[string]*Call)
 )
 
 func init() {
@@ -523,13 +616,6 @@ func init() {
 			println(c.Name)
 			panic("duplicate syscall")
 		}
-		id, ok := CallID[c.CallName]
-		if !ok {
-			id = len(CallID)
-			CallID[c.CallName] = id
-		}
-		c.CallID = id
 		CallMap[c.Name] = c
 	}
-	CallCount = len(CallID)
 }
