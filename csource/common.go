@@ -8,46 +8,136 @@ var commonHeader = `
 #define _GNU_SOURCE
 #endif
 
-#include <sys/ioctl.h>
-#include <sys/mman.h>
-#include <sys/mount.h>
-#include <sys/prctl.h>
-#include <sys/resource.h>
-#include <sys/socket.h>
-#include <sys/stat.h>
+#include <stdint.h>
+#include <string.h>
 #include <sys/syscall.h>
-#include <sys/time.h>
-#include <sys/types.h>
-#include <sys/wait.h>
-
-#include <linux/capability.h>
-#include <linux/if.h>
-#include <linux/if_tun.h>
-#include <linux/kvm.h>
-#include <linux/sched.h>
-#include <net/if_arp.h>
-
-#include <assert.h>
-#include <dirent.h>
-#include <errno.h>
-#include <fcntl.h>
-#include <grp.h>
+#include <unistd.h>
+#if defined(SYZ_EXECUTOR) || defined(SYZ_THREADED) || defined(SYZ_COLLIDE)
 #include <pthread.h>
+#endif
+#if defined(SYZ_EXECUTOR) || defined(SYZ_COLLIDE)
+#include <stdlib.h>
+#endif
+#if defined(SYZ_EXECUTOR) || defined(SYZ_HANDLE_SEGV)
 #include <setjmp.h>
+#include <signal.h>
+#include <string.h>
+#endif
+#if defined(SYZ_EXECUTOR) || defined(SYZ_USE_TMP_DIR)
+#include <errno.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/stat.h>
+#endif
+#if defined(SYZ_EXECUTOR) || (defined(SYZ_REPEAT) && defined(SYZ_WAIT_REPEAT))
+#include <errno.h>
+#include <signal.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <sys/prctl.h>
+#include <sys/time.h>
+#include <sys/wait.h>
+#include <time.h>
+#endif
+#if defined(SYZ_EXECUTOR) || (defined(SYZ_REPEAT) && defined(SYZ_WAIT_REPEAT) && defined(SYZ_USE_TMP_DIR))
+#include <dirent.h>
+#include <sys/mount.h>
+#endif
+#if defined(SYZ_EXECUTOR) || defined(SYZ_SANDBOX_NONE) || defined(SYZ_SANDBOX_SETUID) || defined(SYZ_SANDBOX_NAMESPACE)
+#include <errno.h>
+#include <sched.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdbool.h>
-#include <stddef.h>
-#include <stdint.h>
+#include <stdio.h>
+#include <sys/prctl.h>
+#include <sys/resource.h>
+#include <sys/time.h>
+#include <sys/wait.h>
+#endif
+#if defined(SYZ_EXECUTOR) || defined(SYZ_SANDBOX_SETUID)
+#include <grp.h>
+#endif
+#if defined(SYZ_EXECUTOR) || defined(SYZ_SANDBOX_NAMESPACE)
+#include <fcntl.h>
+#include <linux/capability.h>
+#include <sys/mman.h>
+#include <sys/mount.h>
+#include <sys/stat.h>
+#endif
+#if defined(SYZ_EXECUTOR) || defined(SYZ_TUN_ENABLE)
+#include <arpa/inet.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <linux/if.h>
+#include <linux/if_ether.h>
+#include <linux/if_tun.h>
+#include <linux/ip.h>
+#include <linux/tcp.h>
+#include <net/if_arp.h>
+#include <stdarg.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
+#include <sys/ioctl.h>
+#include <sys/stat.h>
+#endif
+#if defined(SYZ_EXECUTOR) || defined(SYZ_FAULT_INJECTION)
+#include <errno.h>
+#include <fcntl.h>
+#include <stdarg.h>
+#include <stdbool.h>
+#include <stdio.h>
+#include <sys/stat.h>
+#endif
+#if defined(SYZ_EXECUTOR) || defined(SYZ_DEBUG)
+#include <stdarg.h>
+#include <stdio.h>
+#endif
+#ifdef __NR_syz_open_dev
+#include <fcntl.h>
+#include <stdio.h>
+#include <sys/stat.h>
+#endif
+#if defined(__NR_syz_fuse_mount) || defined(__NR_syz_fuseblk_mount)
+#include <fcntl.h>
+#include <stdio.h>
+#include <sys/stat.h>
+#include <sys/sysmacros.h>
+#endif
+#ifdef __NR_syz_open_pts
+#include <fcntl.h>
+#include <stdio.h>
+#include <sys/ioctl.h>
+#include <sys/stat.h>
+#endif
+#ifdef __NR_syz_kvm_setup_cpu
+#include <errno.h>
+#include <fcntl.h>
+#include <linux/kvm.h>
+#include <stdarg.h>
+#include <stddef.h>
+#include <stdio.h>
+#include <sys/ioctl.h>
+#include <sys/stat.h>
+#endif
 
+#if defined(SYZ_EXECUTOR) || (defined(SYZ_REPEAT) && defined(SYZ_WAIT_REPEAT)) || defined(SYZ_USE_TMP_DIR) || \
+    defined(SYZ_TUN_ENABLE) || defined(SYZ_SANDBOX_NAMESPACE) || defined(SYZ_SANDBOX_SETUID) ||               \
+    defined(SYZ_FAULT_INJECTION) || defined(__NR_syz_kvm_setup_cpu)
 const int kFailStatus = 67;
-const int kErrorStatus = 68;
 const int kRetryStatus = 69;
+#endif
 
+#if defined(SYZ_EXECUTOR)
+const int kErrorStatus = 68;
+#endif
+
+#if defined(SYZ_EXECUTOR) || (defined(SYZ_REPEAT) && defined(SYZ_WAIT_REPEAT)) || defined(SYZ_USE_TMP_DIR) || \
+    defined(SYZ_HANDLE_SEGV) || defined(SYZ_TUN_ENABLE) || defined(SYZ_SANDBOX_NAMESPACE) ||                  \
+    defined(SYZ_SANDBOX_SETUID) || defined(SYZ_SANDBOX_NONE) || defined(SYZ_FAULT_INJECTION) ||               \
+    defined(__NR_syz_kvm_setup_cpu)
 __attribute__((noreturn)) void doexit(int status)
 {
 	volatile unsigned i;
@@ -55,12 +145,16 @@ __attribute__((noreturn)) void doexit(int status)
 	for (i = 0;; i++) {
 	}
 }
+#endif
 
 #if defined(SYZ_EXECUTOR)
 #define exit use_doexit_instead
 #define _exit use_doexit_instead
 #endif
 
+#if defined(SYZ_EXECUTOR) || (defined(SYZ_REPEAT) && defined(SYZ_WAIT_REPEAT)) || defined(SYZ_USE_TMP_DIR) || \
+    defined(SYZ_TUN_ENABLE) || defined(SYZ_SANDBOX_NAMESPACE) || defined(SYZ_SANDBOX_SETUID) ||               \
+    defined(SYZ_FAULT_INJECTION) || defined(__NR_syz_kvm_setup_cpu)
 __attribute__((noreturn)) void fail(const char* msg, ...)
 {
 	int e = errno;
@@ -70,8 +164,9 @@ __attribute__((noreturn)) void fail(const char* msg, ...)
 	vfprintf(stderr, msg, args);
 	va_end(args);
 	fprintf(stderr, " (errno %d)\n", e);
-	doexit(e == ENOMEM ? kRetryStatus : kFailStatus);
+	doexit((e == ENOMEM || e == EAGAIN) ? kRetryStatus : kFailStatus);
 }
+#endif
 
 #if defined(SYZ_EXECUTOR)
 __attribute__((noreturn)) void error(const char* msg, ...)
@@ -86,6 +181,7 @@ __attribute__((noreturn)) void error(const char* msg, ...)
 }
 #endif
 
+#if defined(SYZ_EXECUTOR) || (defined(SYZ_REPEAT) && defined(SYZ_WAIT_REPEAT))
 __attribute__((noreturn)) void exitf(const char* msg, ...)
 {
 	int e = errno;
@@ -97,7 +193,9 @@ __attribute__((noreturn)) void exitf(const char* msg, ...)
 	fprintf(stderr, " (errno %d)\n", e);
 	doexit(kRetryStatus);
 }
+#endif
 
+#if defined(SYZ_EXECUTOR) || defined(SYZ_DEBUG)
 static int flag_debug;
 
 void debug(const char* msg, ...)
@@ -110,7 +208,25 @@ void debug(const char* msg, ...)
 	va_end(args);
 	fflush(stdout);
 }
+#endif
 
+#if defined(SYZ_EXECUTOR) || defined(SYZ_USE_BITMASKS)
+#define BITMASK_LEN(type, bf_len) (type)((1ull << (bf_len)) - 1)
+
+#define BITMASK_LEN_OFF(type, bf_off, bf_len) (type)(BITMASK_LEN(type, (bf_len)) << (bf_off))
+
+#define STORE_BY_BITMASK(type, addr, val, bf_off, bf_len)                         \
+	if ((bf_off) == 0 && (bf_len) == 0) {                                     \
+		*(type*)(addr) = (type)(val);                                     \
+	} else {                                                                  \
+		type new_val = *(type*)(addr);                                    \
+		new_val &= ~BITMASK_LEN_OFF(type, (bf_off), (bf_len));            \
+		new_val |= ((type)(val)&BITMASK_LEN(type, (bf_len))) << (bf_off); \
+		*(type*)(addr) = new_val;                                         \
+	}
+#endif
+
+#if defined(SYZ_EXECUTOR) || defined(SYZ_HANDLE_SEGV)
 __thread int skip_segv;
 __thread jmp_buf segv_env;
 
@@ -132,6 +248,12 @@ static void segv_handler(int sig, siginfo_t* info, void* uctx)
 static void install_segv_handler()
 {
 	struct sigaction sa;
+
+	memset(&sa, 0, sizeof(sa));
+	sa.sa_handler = SIG_IGN;
+	syscall(SYS_rt_sigaction, 0x20, &sa, NULL, 8);
+	syscall(SYS_rt_sigaction, 0x21, &sa, NULL, 8);
+
 	memset(&sa, 0, sizeof(sa));
 	sa.sa_sigaction = segv_handler;
 	sa.sa_flags = SA_NODEFER | SA_SIGINFO;
@@ -147,22 +269,23 @@ static void install_segv_handler()
 		}                                                    \
 		__atomic_fetch_sub(&skip_segv, 1, __ATOMIC_SEQ_CST); \
 	}
+#endif
 
-#define BITMASK_LEN(type, bf_len) (type)((1ull << (bf_len)) - 1)
+#if defined(SYZ_EXECUTOR) || defined(SYZ_USE_TMP_DIR)
+static void use_temporary_dir()
+{
+	char tmpdir_template[] = "./syzkaller.XXXXXX";
+	char* tmpdir = mkdtemp(tmpdir_template);
+	if (!tmpdir)
+		fail("failed to mkdtemp");
+	if (chmod(tmpdir, 0777))
+		fail("failed to chmod");
+	if (chdir(tmpdir))
+		fail("failed to chdir");
+}
+#endif
 
-#define BITMASK_LEN_OFF(type, bf_off, bf_len) (type)(BITMASK_LEN(type, (bf_len)) << (bf_off))
-
-#define STORE_BY_BITMASK(type, addr, val, bf_off, bf_len)                         \
-	if ((bf_off) == 0 && (bf_len) == 0) {                                     \
-		*(type*)(addr) = (type)(val);                                     \
-	} else {                                                                  \
-		type new_val = *(type*)(addr);                                    \
-		new_val &= ~BITMASK_LEN_OFF(type, (bf_off), (bf_len));            \
-		new_val |= ((type)(val)&BITMASK_LEN(type, (bf_len))) << (bf_off); \
-		*(type*)(addr) = new_val;                                         \
-	}
-
-#ifdef __NR_syz_emit_ethernet
+#if defined(SYZ_EXECUTOR) || defined(SYZ_TUN_ENABLE)
 static void vsnprintf_check(char* str, size_t size, const char* format, va_list args)
 {
 	int rv;
@@ -203,6 +326,8 @@ static void execute_command(const char* format, ...)
 
 int tunfd = -1;
 
+#define SYZ_TUN_MAX_PACKET_SIZE 1000
+
 #define MAX_PIDS 32
 #define ADDR_MAX_LEN 32
 
@@ -212,8 +337,8 @@ int tunfd = -1;
 #define LOCAL_IPV4 "172.20.%d.170"
 #define REMOTE_IPV4 "172.20.%d.187"
 
-#define LOCAL_IPV6 "fd00::%02hxaa"
-#define REMOTE_IPV6 "fd00::%02hxbb"
+#define LOCAL_IPV6 "fe80::%02hxaa"
+#define REMOTE_IPV6 "fe80::%02hxbb"
 
 static void initialize_tun(uint64_t pid)
 {
@@ -221,7 +346,7 @@ static void initialize_tun(uint64_t pid)
 		fail("tun: no more than %d executors", MAX_PIDS);
 	int id = pid;
 
-	tunfd = open("/dev/net/tun", O_RDWR);
+	tunfd = open("/dev/net/tun", O_RDWR | O_NONBLOCK);
 	if (tunfd == -1)
 		fail("tun: can't open /dev/net/tun");
 
@@ -250,12 +375,16 @@ static void initialize_tun(uint64_t pid)
 	char remote_ipv6[ADDR_MAX_LEN];
 	snprintf_check(remote_ipv6, sizeof(remote_ipv6), REMOTE_IPV6, id);
 
+	execute_command("sysctl -w net.ipv6.conf.%s.accept_dad=0", iface);
+
+	execute_command("sysctl -w net.ipv6.conf.%s.router_solicitations=0", iface);
+
 	execute_command("ip link set dev %s address %s", iface, local_mac);
 	execute_command("ip addr add %s/24 dev %s", local_ipv4, iface);
 	execute_command("ip -6 addr add %s/120 dev %s", local_ipv6, iface);
 	execute_command("ip neigh add %s lladdr %s dev %s nud permanent", remote_ipv4, remote_mac, iface);
 	execute_command("ip -6 neigh add %s lladdr %s dev %s nud permanent", remote_ipv6, remote_mac, iface);
-	execute_command("ip link set %s up", iface);
+	execute_command("ip link set dev %s up", iface);
 }
 
 static void setup_tun(uint64_t pid, bool enable_tun)
@@ -263,15 +392,156 @@ static void setup_tun(uint64_t pid, bool enable_tun)
 	if (enable_tun)
 		initialize_tun(pid);
 }
+#endif
 
+#if defined(SYZ_EXECUTOR) || (defined(SYZ_TUN_ENABLE) && (defined(__NR_syz_extract_tcp_res) || defined(SYZ_REPEAT)))
+static int read_tun(char* data, int size)
+{
+	int rv = read(tunfd, data, size);
+	if (rv < 0) {
+		if (errno == EAGAIN)
+			return -1;
+		fail("tun: read failed with %d, errno: %d", rv, errno);
+	}
+	return rv;
+}
+#endif
+
+#if defined(SYZ_EXECUTOR) || (defined(SYZ_DEBUG) && defined(SYZ_TUN_ENABLE) && (defined(__NR_syz_emit_ethernet) || defined(__NR_syz_extract_tcp_res)))
+static void debug_dump_data(const char* data, int length)
+{
+	int i;
+	for (i = 0; i < length; i++) {
+		debug("%02hx ", (uint8_t)data[i] & (uint8_t)0xff);
+		if (i % 16 == 15)
+			debug("\n");
+	}
+	if (i % 16 != 0)
+		debug("\n");
+}
+#endif
+
+#if defined(SYZ_EXECUTOR) || defined(SYZ_USE_CHECKSUMS) || defined(__NR_syz_test)
+struct csum_inet {
+	uint32_t acc;
+};
+
+void csum_inet_init(struct csum_inet* csum)
+{
+	csum->acc = 0;
+}
+
+void csum_inet_update(struct csum_inet* csum, const uint8_t* data, size_t length)
+{
+	if (length == 0)
+		return;
+
+	size_t i;
+	for (i = 0; i < length - 1; i += 2)
+		csum->acc += *(uint16_t*)&data[i];
+
+	if (length & 1)
+		csum->acc += (uint16_t)data[length - 1];
+
+	while (csum->acc > 0xffff)
+		csum->acc = (csum->acc & 0xffff) + (csum->acc >> 16);
+}
+
+uint16_t csum_inet_digest(struct csum_inet* csum)
+{
+	return ~csum->acc;
+}
+#endif
+
+#if defined(SYZ_EXECUTOR) || (defined(__NR_syz_emit_ethernet) && defined(SYZ_TUN_ENABLE))
 static uintptr_t syz_emit_ethernet(uintptr_t a0, uintptr_t a1)
 {
+
 	if (tunfd < 0)
 		return (uintptr_t)-1;
 
 	int64_t length = a0;
 	char* data = (char*)a1;
+	debug_dump_data(data, length);
 	return write(tunfd, data, length);
+}
+#endif
+
+#if defined(SYZ_EXECUTOR) || (defined(SYZ_REPEAT) && defined(SYZ_TUN_ENABLE))
+void flush_tun()
+{
+	char data[SYZ_TUN_MAX_PACKET_SIZE];
+	while (read_tun(&data[0], sizeof(data)) != -1)
+		;
+}
+#endif
+
+#if defined(SYZ_EXECUTOR) || (defined(__NR_syz_extract_tcp_res) && defined(SYZ_TUN_ENABLE))
+struct ipv6hdr {
+	__u8 priority : 4,
+	    version : 4;
+	__u8 flow_lbl[3];
+
+	__be16 payload_len;
+	__u8 nexthdr;
+	__u8 hop_limit;
+
+	struct in6_addr saddr;
+	struct in6_addr daddr;
+};
+
+struct tcp_resources {
+	int32_t seq;
+	int32_t ack;
+};
+
+static uintptr_t syz_extract_tcp_res(uintptr_t a0, uintptr_t a1, uintptr_t a2)
+{
+
+	if (tunfd < 0)
+		return (uintptr_t)-1;
+
+	char data[SYZ_TUN_MAX_PACKET_SIZE];
+	int rv = read_tun(&data[0], sizeof(data));
+	if (rv == -1)
+		return (uintptr_t)-1;
+	size_t length = rv;
+	debug_dump_data(data, length);
+
+	struct tcphdr* tcphdr;
+
+	if (length < sizeof(struct ethhdr))
+		return (uintptr_t)-1;
+	struct ethhdr* ethhdr = (struct ethhdr*)&data[0];
+
+	if (ethhdr->h_proto == htons(ETH_P_IP)) {
+		if (length < sizeof(struct ethhdr) + sizeof(struct iphdr))
+			return (uintptr_t)-1;
+		struct iphdr* iphdr = (struct iphdr*)&data[sizeof(struct ethhdr)];
+		if (iphdr->protocol != IPPROTO_TCP)
+			return (uintptr_t)-1;
+		if (length < sizeof(struct ethhdr) + iphdr->ihl * 4 + sizeof(struct tcphdr))
+			return (uintptr_t)-1;
+		tcphdr = (struct tcphdr*)&data[sizeof(struct ethhdr) + iphdr->ihl * 4];
+	} else {
+		if (length < sizeof(struct ethhdr) + sizeof(struct ipv6hdr))
+			return (uintptr_t)-1;
+		struct ipv6hdr* ipv6hdr = (struct ipv6hdr*)&data[sizeof(struct ethhdr)];
+		if (ipv6hdr->nexthdr != IPPROTO_TCP)
+			return (uintptr_t)-1;
+		if (length < sizeof(struct ethhdr) + sizeof(struct ipv6hdr) + sizeof(struct tcphdr))
+			return (uintptr_t)-1;
+		tcphdr = (struct tcphdr*)&data[sizeof(struct ethhdr) + sizeof(struct ipv6hdr)];
+	}
+
+	struct tcp_resources* res = (struct tcp_resources*)a0;
+	NONFAILING(res->seq = htonl((ntohl(tcphdr->seq) + (uint32_t)a1)));
+	NONFAILING(res->ack = htonl((ntohl(tcphdr->ack_seq) + (uint32_t)a2)));
+
+	debug("extracted seq: %08x\n", res->seq);
+	debug("extracted ack: %08x\n", res->ack);
+
+	return 0;
 }
 #endif
 
@@ -1057,69 +1327,71 @@ static uintptr_t syz_kvm_setup_cpu(uintptr_t a0, uintptr_t a1, uintptr_t a2, uin
 		}
 	}
 
-	struct tss16* tss16 = (struct tss16*)(host_mem + seg_tss16_2.base);
-	NONFAILING(
-	    struct tss16* tss = tss16;
-	    memset(tss, 0, sizeof(*tss));
-	    tss->ss0 = tss->ss1 = tss->ss2 = SEL_DS16;
-	    tss->sp0 = tss->sp1 = tss->sp2 = ADDR_STACK0;
-	    tss->ip = ADDR_VAR_USER_CODE2;
-	    tss->flags = (1 << 1);
-	    tss->cs = SEL_CS16;
-	    tss->es = tss->ds = tss->ss = SEL_DS16;
-	    tss->ldt = SEL_LDT);
-	struct tss16* tss16_cpl3 = (struct tss16*)(host_mem + seg_tss16_cpl3.base);
-	NONFAILING(
-	    struct tss16* tss = tss16_cpl3;
-	    memset(tss, 0, sizeof(*tss));
-	    tss->ss0 = tss->ss1 = tss->ss2 = SEL_DS16;
-	    tss->sp0 = tss->sp1 = tss->sp2 = ADDR_STACK0;
-	    tss->ip = ADDR_VAR_USER_CODE2;
-	    tss->flags = (1 << 1);
-	    tss->cs = SEL_CS16_CPL3;
-	    tss->es = tss->ds = tss->ss = SEL_DS16_CPL3;
-	    tss->ldt = SEL_LDT);
-	struct tss32* tss32 = (struct tss32*)(host_mem + seg_tss32_vm86.base);
-	NONFAILING(
-	    struct tss32* tss = tss32;
-	    memset(tss, 0, sizeof(*tss));
-	    tss->ss0 = tss->ss1 = tss->ss2 = SEL_DS32;
-	    tss->sp0 = tss->sp1 = tss->sp2 = ADDR_STACK0;
-	    tss->ip = ADDR_VAR_USER_CODE;
-	    tss->flags = (1 << 1) | (1 << 17);
-	    tss->ldt = SEL_LDT;
-	    tss->cr3 = sregs.cr3;
-	    tss->io_bitmap = offsetof(struct tss32, io_bitmap));
-	struct tss32* tss32_cpl3 = (struct tss32*)(host_mem + seg_tss32_2.base);
-	NONFAILING(
-	    struct tss32* tss = tss32_cpl3;
-	    memset(tss, 0, sizeof(*tss));
-	    tss->ss0 = tss->ss1 = tss->ss2 = SEL_DS32;
-	    tss->sp0 = tss->sp1 = tss->sp2 = ADDR_STACK0;
-	    tss->ip = ADDR_VAR_USER_CODE;
-	    tss->flags = (1 << 1);
-	    tss->cr3 = sregs.cr3;
-	    tss->es = tss->ds = tss->ss = tss->gs = tss->fs = SEL_DS32;
-	    tss->cs = SEL_CS32;
-	    tss->ldt = SEL_LDT;
-	    tss->cr3 = sregs.cr3;
-	    tss->io_bitmap = offsetof(struct tss32, io_bitmap));
-	struct tss64* tss64 = (struct tss64*)(host_mem + seg_tss64.base);
-	NONFAILING(
-	    struct tss64* tss = tss64;
-	    memset(tss, 0, sizeof(*tss));
-	    tss->rsp[0] = ADDR_STACK0;
-	    tss->rsp[1] = ADDR_STACK0;
-	    tss->rsp[2] = ADDR_STACK0;
-	    tss->io_bitmap = offsetof(struct tss64, io_bitmap));
-	struct tss64* tss64_cpl3 = (struct tss64*)(host_mem + seg_tss64_cpl3.base);
-	NONFAILING(
-	    struct tss64* tss = tss64_cpl3;
-	    memset(tss, 0, sizeof(*tss));
-	    tss->rsp[0] = ADDR_STACK0;
-	    tss->rsp[1] = ADDR_STACK0;
-	    tss->rsp[2] = ADDR_STACK0;
-	    tss->io_bitmap = offsetof(struct tss64, io_bitmap));
+	struct tss16 tss16;
+	memset(&tss16, 0, sizeof(tss16));
+	tss16.ss0 = tss16.ss1 = tss16.ss2 = SEL_DS16;
+	tss16.sp0 = tss16.sp1 = tss16.sp2 = ADDR_STACK0;
+	tss16.ip = ADDR_VAR_USER_CODE2;
+	tss16.flags = (1 << 1);
+	tss16.cs = SEL_CS16;
+	tss16.es = tss16.ds = tss16.ss = SEL_DS16;
+	tss16.ldt = SEL_LDT;
+	struct tss16* tss16_addr = (struct tss16*)(host_mem + seg_tss16_2.base);
+	NONFAILING(memcpy(tss16_addr, &tss16, sizeof(tss16)));
+
+	memset(&tss16, 0, sizeof(tss16));
+	tss16.ss0 = tss16.ss1 = tss16.ss2 = SEL_DS16;
+	tss16.sp0 = tss16.sp1 = tss16.sp2 = ADDR_STACK0;
+	tss16.ip = ADDR_VAR_USER_CODE2;
+	tss16.flags = (1 << 1);
+	tss16.cs = SEL_CS16_CPL3;
+	tss16.es = tss16.ds = tss16.ss = SEL_DS16_CPL3;
+	tss16.ldt = SEL_LDT;
+	struct tss16* tss16_cpl3_addr = (struct tss16*)(host_mem + seg_tss16_cpl3.base);
+	NONFAILING(memcpy(tss16_cpl3_addr, &tss16, sizeof(tss16)));
+
+	struct tss32 tss32;
+	memset(&tss32, 0, sizeof(tss32));
+	tss32.ss0 = tss32.ss1 = tss32.ss2 = SEL_DS32;
+	tss32.sp0 = tss32.sp1 = tss32.sp2 = ADDR_STACK0;
+	tss32.ip = ADDR_VAR_USER_CODE;
+	tss32.flags = (1 << 1) | (1 << 17);
+	tss32.ldt = SEL_LDT;
+	tss32.cr3 = sregs.cr3;
+	tss32.io_bitmap = offsetof(struct tss32, io_bitmap);
+	struct tss32* tss32_addr = (struct tss32*)(host_mem + seg_tss32_vm86.base);
+	NONFAILING(memcpy(tss32_addr, &tss32, sizeof(tss32)));
+
+	memset(&tss32, 0, sizeof(tss32));
+	tss32.ss0 = tss32.ss1 = tss32.ss2 = SEL_DS32;
+	tss32.sp0 = tss32.sp1 = tss32.sp2 = ADDR_STACK0;
+	tss32.ip = ADDR_VAR_USER_CODE;
+	tss32.flags = (1 << 1);
+	tss32.cr3 = sregs.cr3;
+	tss32.es = tss32.ds = tss32.ss = tss32.gs = tss32.fs = SEL_DS32;
+	tss32.cs = SEL_CS32;
+	tss32.ldt = SEL_LDT;
+	tss32.cr3 = sregs.cr3;
+	tss32.io_bitmap = offsetof(struct tss32, io_bitmap);
+	struct tss32* tss32_cpl3_addr = (struct tss32*)(host_mem + seg_tss32_2.base);
+	NONFAILING(memcpy(tss32_cpl3_addr, &tss32, sizeof(tss32)));
+
+	struct tss64 tss64;
+	memset(&tss64, 0, sizeof(tss64));
+	tss64.rsp[0] = ADDR_STACK0;
+	tss64.rsp[1] = ADDR_STACK0;
+	tss64.rsp[2] = ADDR_STACK0;
+	tss64.io_bitmap = offsetof(struct tss64, io_bitmap);
+	struct tss64* tss64_addr = (struct tss64*)(host_mem + seg_tss64.base);
+	NONFAILING(memcpy(tss64_addr, &tss64, sizeof(tss64)));
+
+	memset(&tss64, 0, sizeof(tss64));
+	tss64.rsp[0] = ADDR_STACK0;
+	tss64.rsp[1] = ADDR_STACK0;
+	tss64.rsp[2] = ADDR_STACK0;
+	tss64.io_bitmap = offsetof(struct tss64, io_bitmap);
+	struct tss64* tss64_cpl3_addr = (struct tss64*)(host_mem + seg_tss64_cpl3.base);
+	NONFAILING(memcpy(tss64_cpl3_addr, &tss64, sizeof(tss64)));
 
 	if (text_size > 1000)
 		text_size = 1000;
@@ -1171,10 +1443,10 @@ static uintptr_t syz_kvm_setup_cpu(uintptr_t a0, uintptr_t a1, uintptr_t a2, uin
 			val &= ((1 << 8) | (1 << 9) | (1 << 10) | (1 << 12) | (1 << 13) | (1 << 14) |
 				(1 << 15) | (1 << 18) | (1 << 19) | (1 << 20) | (1 << 21));
 			regs.rflags ^= val;
-			NONFAILING(tss16->flags ^= val);
-			NONFAILING(tss16_cpl3->flags ^= val);
-			NONFAILING(tss32->flags ^= val);
-			NONFAILING(tss32_cpl3->flags ^= val);
+			NONFAILING(tss16_addr->flags ^= val);
+			NONFAILING(tss16_cpl3_addr->flags ^= val);
+			NONFAILING(tss32_addr->flags ^= val);
+			NONFAILING(tss32_cpl3_addr->flags ^= val);
 			break;
 		case 4:
 			seg_cs16.type = val & 0xf;
@@ -1320,9 +1592,15 @@ static uintptr_t syz_kvm_setup_cpu(uintptr_t a0, uintptr_t a1, uintptr_t a2, uin
 
 	return 0;
 }
+#else
+static uintptr_t syz_kvm_setup_cpu(uintptr_t a0, uintptr_t a1, uintptr_t a2, uintptr_t a3, uintptr_t a4, uintptr_t a5, uintptr_t a6, uintptr_t a7)
+{
+	return 0;
+}
 #endif
 #endif
 
+#ifdef SYZ_EXECUTOR
 static uintptr_t execute_syscall(int nr, uintptr_t a0, uintptr_t a1, uintptr_t a2, uintptr_t a3, uintptr_t a4, uintptr_t a5, uintptr_t a6, uintptr_t a7, uintptr_t a8)
 {
 	switch (nr) {
@@ -1352,32 +1630,19 @@ static uintptr_t execute_syscall(int nr, uintptr_t a0, uintptr_t a1, uintptr_t a
 	case __NR_syz_emit_ethernet:
 		return syz_emit_ethernet(a0, a1);
 #endif
+#ifdef __NR_syz_extract_tcp_res
+	case __NR_syz_extract_tcp_res:
+		return syz_extract_tcp_res(a0, a1, a2);
+#endif
 #ifdef __NR_syz_kvm_setup_cpu
 	case __NR_syz_kvm_setup_cpu:
 		return syz_kvm_setup_cpu(a0, a1, a2, a3, a4, a5, a6, a7);
 #endif
 	}
 }
+#endif
 
-static void setup_main_process()
-{
-	struct sigaction sa;
-	memset(&sa, 0, sizeof(sa));
-	sa.sa_handler = SIG_IGN;
-	syscall(SYS_rt_sigaction, 0x20, &sa, NULL, 8);
-	syscall(SYS_rt_sigaction, 0x21, &sa, NULL, 8);
-	install_segv_handler();
-
-	char tmpdir_template[] = "./syzkaller.XXXXXX";
-	char* tmpdir = mkdtemp(tmpdir_template);
-	if (!tmpdir)
-		fail("failed to mkdtemp");
-	if (chmod(tmpdir, 0777))
-		fail("failed to chmod");
-	if (chdir(tmpdir))
-		fail("failed to chdir");
-}
-
+#if defined(SYZ_EXECUTOR) || defined(SYZ_SANDBOX_NONE) || defined(SYZ_SANDBOX_SETUID) || defined(SYZ_SANDBOX_NAMESPACE)
 static void loop();
 
 static void sandbox_common()
@@ -1400,6 +1665,7 @@ static void sandbox_common()
 	unshare(CLONE_NEWIPC);
 	unshare(CLONE_IO);
 }
+#endif
 
 #if defined(SYZ_EXECUTOR) || defined(SYZ_SANDBOX_NONE)
 static int do_sandbox_none(int executor_pid, bool enable_tun)
@@ -1409,7 +1675,7 @@ static int do_sandbox_none(int executor_pid, bool enable_tun)
 		return pid;
 
 	sandbox_common();
-#ifdef __NR_syz_emit_ethernet
+#if defined(SYZ_EXECUTOR) || defined(SYZ_TUN_ENABLE)
 	setup_tun(executor_pid, enable_tun);
 #endif
 
@@ -1426,7 +1692,7 @@ static int do_sandbox_setuid(int executor_pid, bool enable_tun)
 		return pid;
 
 	sandbox_common();
-#ifdef __NR_syz_emit_ethernet
+#if defined(SYZ_EXECUTOR) || defined(SYZ_TUN_ENABLE)
 	setup_tun(executor_pid, enable_tun);
 #endif
 
@@ -1438,18 +1704,14 @@ static int do_sandbox_setuid(int executor_pid, bool enable_tun)
 	if (syscall(SYS_setresuid, nobody, nobody, nobody))
 		fail("failed to setresuid");
 
+	prctl(PR_SET_DUMPABLE, 1, 0, 0, 0);
+
 	loop();
 	doexit(1);
 }
 #endif
 
-#if defined(SYZ_EXECUTOR) || defined(SYZ_SANDBOX_NAMESPACE)
-static int real_uid;
-static int real_gid;
-static int epid;
-static bool etun;
-__attribute__((aligned(64 << 10))) static char sandbox_stack[1 << 20];
-
+#if defined(SYZ_EXECUTOR) || defined(SYZ_SANDBOX_NAMESPACE) || defined(SYZ_FAULT_INJECTION)
 static bool write_file(const char* file, const char* what, ...)
 {
 	char buf[1024];
@@ -1470,6 +1732,14 @@ static bool write_file(const char* file, const char* what, ...)
 	close(fd);
 	return true;
 }
+#endif
+
+#if defined(SYZ_EXECUTOR) || defined(SYZ_SANDBOX_NAMESPACE)
+static int real_uid;
+static int real_gid;
+static int epid;
+static bool etun;
+__attribute__((aligned(64 << 10))) static char sandbox_stack[1 << 20];
 
 static int namespace_sandbox_proc(void* arg)
 {
@@ -1481,7 +1751,7 @@ static int namespace_sandbox_proc(void* arg)
 	if (!write_file("/proc/self/gid_map", "0 %d 1\n", real_gid))
 		fail("write of /proc/self/gid_map failed");
 
-#ifdef __NR_syz_emit_ethernet
+#if defined(SYZ_EXECUTOR) || defined(SYZ_TUN_ENABLE)
 	setup_tun(epid, etun);
 #endif
 
@@ -1495,6 +1765,10 @@ static int namespace_sandbox_proc(void* arg)
 		fail("mkdir failed");
 	if (mount("/dev", "./syz-tmp/newroot/dev", NULL, MS_BIND | MS_REC | MS_PRIVATE, NULL))
 		fail("mount(dev) failed");
+	if (mkdir("./syz-tmp/newroot/proc", 0700))
+		fail("mkdir failed");
+	if (mount(NULL, "./syz-tmp/newroot/proc", "proc", 0, NULL))
+		fail("mount(proc) failed");
 	if (mkdir("./syz-tmp/pivot", 0777))
 		fail("mkdir failed");
 	if (syscall(SYS_pivot_root, "./syz-tmp", "./syz-tmp/pivot")) {
@@ -1535,12 +1809,12 @@ static int do_sandbox_namespace(int executor_pid, bool enable_tun)
 	epid = executor_pid;
 	etun = enable_tun;
 	mprotect(sandbox_stack, 4096, PROT_NONE);
-	return clone(namespace_sandbox_proc, &sandbox_stack[sizeof(sandbox_stack) - 8],
+	return clone(namespace_sandbox_proc, &sandbox_stack[sizeof(sandbox_stack) - 64],
 		     CLONE_NEWUSER | CLONE_NEWPID | CLONE_NEWUTS | CLONE_NEWNET, NULL);
 }
 #endif
 
-#if defined(SYZ_EXECUTOR) || defined(SYZ_REPEAT)
+#if defined(SYZ_EXECUTOR) || (defined(SYZ_REPEAT) && defined(SYZ_WAIT_REPEAT) && defined(SYZ_USE_TMP_DIR))
 static void remove_dir(const char* dir)
 {
 	DIR* dp;
@@ -1611,7 +1885,7 @@ retry:
 }
 #endif
 
-#if defined(SYZ_EXECUTOR) || defined(SYZ_REPEAT)
+#if defined(SYZ_EXECUTOR) || (defined(SYZ_REPEAT) && defined(SYZ_WAIT_REPEAT))
 static uint64_t current_time_ms()
 {
 	struct timespec ts;
@@ -1622,25 +1896,50 @@ static uint64_t current_time_ms()
 }
 #endif
 
+#if defined(SYZ_EXECUTOR) || defined(SYZ_FAULT_INJECTION)
+static int inject_fault(int nth)
+{
+	int fd;
+	char buf[128];
+
+	sprintf(buf, "/proc/self/task/%d/fail-nth", (int)syscall(SYS_gettid));
+	fd = open(buf, O_RDWR);
+	if (fd == -1)
+		fail("failed to open /proc/self/task/tid/fail-nth");
+	sprintf(buf, "%d", nth + 1);
+	if (write(fd, buf, strlen(buf)) != (ssize_t)strlen(buf))
+		fail("failed to write /proc/self/task/tid/fail-nth");
+	return fd;
+}
+#endif
+
 #if defined(SYZ_REPEAT)
 static void test();
 
+#if defined(SYZ_WAIT_REPEAT)
 void loop()
 {
 	int iter;
 	for (iter = 0;; iter++) {
+#ifdef SYZ_USE_TMP_DIR
 		char cwdbuf[256];
 		sprintf(cwdbuf, "./%d", iter);
 		if (mkdir(cwdbuf, 0777))
 			fail("failed to mkdir");
+#endif
 		int pid = fork();
 		if (pid < 0)
 			fail("clone failed");
 		if (pid == 0) {
 			prctl(PR_SET_PDEATHSIG, SIGKILL, 0, 0, 0);
 			setpgrp();
+#ifdef SYZ_USE_TMP_DIR
 			if (chdir(cwdbuf))
 				fail("failed to chdir");
+#endif
+#ifdef SYZ_TUN_ENABLE
+			flush_tun();
+#endif
 			test();
 			doexit(0);
 		}
@@ -1659,8 +1958,18 @@ void loop()
 				break;
 			}
 		}
+#ifdef SYZ_USE_TMP_DIR
 		remove_dir(cwdbuf);
+#endif
 	}
 }
+#else
+void loop()
+{
+	while (1) {
+		test();
+	}
+}
+#endif
 #endif
 `

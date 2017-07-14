@@ -7,7 +7,18 @@ import (
 	"testing"
 )
 
+func TestResourceCtors(t *testing.T) {
+	for _, c := range Calls {
+		for _, res := range c.InputResources() {
+			if len(resourceCtors(res.Desc.Kind, true)) == 0 {
+				t.Errorf("call %v requires input resource %v, but there are no calls that can create this resource", c.Name, res.Desc.Name)
+			}
+		}
+	}
+}
+
 func TestTransitivelyEnabledCalls(t *testing.T) {
+	t.Parallel()
 	calls := make(map[*Call]bool)
 	for _, c := range Calls {
 		calls[c] = true
@@ -37,6 +48,7 @@ func TestTransitivelyEnabledCalls(t *testing.T) {
 }
 
 func TestClockGettime(t *testing.T) {
+	t.Parallel()
 	calls := make(map[*Call]bool)
 	for _, c := range Calls {
 		calls[c] = true

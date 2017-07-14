@@ -39,7 +39,11 @@ var oopses = []*oops{
 				"KASAN: %[1]v %[2]v of size %[3]v",
 			},
 			{
-				compile("BUG: unable to handle kernel paging request(?:.*\\n)+?.*IP: {{PC}} +{{FUNC}}"),
+				compile("BUG: KASAN: (.*)"),
+				"KASAN: %[1]v",
+			},
+			{
+				compile("BUG: unable to handle kernel paging request(?:.*\\n)+?.*IP: (?:{{PC}} +)?{{FUNC}}"),
 				"BUG: unable to handle kernel paging request in %[1]v",
 			},
 			{
@@ -47,7 +51,7 @@ var oopses = []*oops{
 				"BUG: unable to handle kernel paging request",
 			},
 			{
-				compile("BUG: unable to handle kernel NULL pointer dereference(?:.*\\n)+?.*IP: {{PC}} +{{FUNC}}"),
+				compile("BUG: unable to handle kernel NULL pointer dereference(?:.*\\n)+?.*IP: (?:{{PC}} +)?{{FUNC}}"),
 				"BUG: unable to handle kernel NULL pointer dereference in %[1]v",
 			},
 			{
@@ -67,6 +71,14 @@ var oopses = []*oops{
 				"BUG: still has locks held in %[1]v",
 			},
 			{
+				compile("BUG: bad unlock balance detected!(?:.*\\n)+?.*{{PC}} +{{FUNC}}"),
+				"BUG: bad unlock balance in %[1]v",
+			},
+			{
+				compile("BUG: held lock freed!(?:.*\\n)+?.*{{PC}} +{{FUNC}}"),
+				"BUG: held lock freed in %[1]v",
+			},
+			{
 				compile("BUG: Bad rss-counter state"),
 				"BUG: Bad rss-counter state",
 			},
@@ -78,6 +90,18 @@ var oopses = []*oops{
 				compile("BUG: non-zero nr_pmds on freeing mm"),
 				"BUG: non-zero nr_pmds on freeing mm",
 			},
+			{
+				compile("BUG: Dentry .* still in use \\([0-9]+\\) \\[unmount of ([^\\]]+)\\]"),
+				"BUG: Dentry still in use [unmount of %[1]v]",
+			},
+			{
+				compile("BUG: Bad page state .*"),
+				"BUG: Bad page state",
+			},
+			{
+				compile("BUG: spinlock bad magic .*"),
+				"BUG: spinlock bad magic",
+			},
 		},
 		[]*regexp.Regexp{},
 	},
@@ -87,6 +111,38 @@ var oopses = []*oops{
 			{
 				compile("WARNING: .* at {{SRC}} {{FUNC}}"),
 				"WARNING in %[2]v",
+			},
+			{
+				compile("WARNING: possible circular locking dependency detected(?:.*\\n)+?.*is trying to acquire lock(?:.*\\n)+?.*at: {{PC}} +{{FUNC}}"),
+				"possible deadlock in %[1]v",
+			},
+			{
+				compile("WARNING: possible irq lock inversion dependency detected(?:.*\\n)+?.*just changed the state of lock(?:.*\\n)+?.*at: {{PC}} +{{FUNC}}"),
+				"possible deadlock in %[1]v",
+			},
+			{
+				compile("WARNING: SOFTIRQ-safe -> SOFTIRQ-unsafe lock order detected(?:.*\\n)+?.*is trying to acquire(?:.*\\n)+?.*at: {{PC}} +{{FUNC}}"),
+				"possible deadlock in %[1]v",
+			},
+			{
+				compile("WARNING: possible recursive locking detected(?:.*\\n)+?.*is trying to acquire lock(?:.*\\n)+?.*at: {{PC}} +{{FUNC}}"),
+				"possible deadlock in %[1]v",
+			},
+			{
+				compile("WARNING: inconsistent lock state(?:.*\\n)+?.*takes(?:.*\\n)+?.*at: {{PC}} +{{FUNC}}"),
+				"inconsistent lock state in %[1]v",
+			},
+			{
+				compile("WARNING: suspicious RCU usage(?:.*\n)+?.*?{{SRC}}"),
+				"suspicious RCU usage at %[1]v",
+			},
+			{
+				compile("WARNING: kernel stack regs at [0-9a-f]+ in [^ ]* has bad '([^']+)' value"),
+				"WARNING: kernel stack regs has bad '%[1]v' value",
+			},
+			{
+				compile("WARNING: kernel stack frame pointer at [0-9a-f]+ in [^ ]* has bad value"),
+				"WARNING: kernel stack frame pointer has bad value",
 			},
 		},
 		[]*regexp.Regexp{
@@ -101,16 +157,48 @@ var oopses = []*oops{
 				"possible deadlock in %[1]v",
 			},
 			{
+				compile("INFO: possible irq lock inversion dependency detected \\](?:.*\\n)+?.*just changed the state of lock(?:.*\\n)+?.*at: {{PC}} +{{FUNC}}"),
+				"possible deadlock in %[1]v",
+			},
+			{
+				compile("INFO: SOFTIRQ-safe -> SOFTIRQ-unsafe lock order detected \\](?:.*\\n)+?.*is trying to acquire(?:.*\\n)+?.*at: {{PC}} +{{FUNC}}"),
+				"possible deadlock in %[1]v",
+			},
+			{
+				compile("INFO: possible recursive locking detected \\](?:.*\\n)+?.*is trying to acquire lock(?:.*\\n)+?.*at: {{PC}} +{{FUNC}}"),
+				"possible deadlock in %[1]v",
+			},
+			{
+				compile("INFO: inconsistent lock state \\](?:.*\\n)+?.*takes(?:.*\\n)+?.*at: {{PC}} +{{FUNC}}"),
+				"inconsistent lock state in %[1]v",
+			},
+			{
+				compile("INFO: rcu_preempt detected stalls(?:.*\\n)+?.*</IRQ>.*\n(?:.* \\? .*\\n)+?(?:.*rcu.*\\n)+?.*\\]  {{FUNC}}"),
+				"INFO: rcu detected stall in %[1]v",
+			},
+			{
 				compile("INFO: rcu_preempt detected stalls"),
 				"INFO: rcu detected stall",
+			},
+			{
+				compile("INFO: rcu_sched detected stalls(?:.*\\n)+?.*</IRQ>.*\n(?:.* \\? .*\\n)+?(?:.*rcu.*\\n)+?.*\\]  {{FUNC}}"),
+				"INFO: rcu detected stall in %[1]v",
 			},
 			{
 				compile("INFO: rcu_sched detected stalls"),
 				"INFO: rcu detected stall",
 			},
 			{
+				compile("INFO: rcu_preempt self-detected stall on CPU(?:.*\\n)+?.*</IRQ>.*\n(?:.* \\? .*\\n)+?(?:.*rcu.*\\n)+?.*\\]  {{FUNC}}"),
+				"INFO: rcu detected stall in %[1]v",
+			},
+			{
 				compile("INFO: rcu_preempt self-detected stall on CPU"),
 				"INFO: rcu detected stall",
+			},
+			{
+				compile("INFO: rcu_sched self-detected stall on CPU(?:.*\\n)+?.*</IRQ>.*\n(?:.* \\? .*\\n)+?(?:.*rcu.*\\n)+?.*\\]  {{FUNC}}"),
+				"INFO: rcu detected stall in %[1]v",
 			},
 			{
 				compile("INFO: rcu_sched self-detected stall on CPU"),
@@ -163,6 +251,10 @@ var oopses = []*oops{
 				"kernel panic: Attempted to kill init!",
 			},
 			{
+				compile("Kernel panic - not syncing: Couldn't open N_TTY ldisc for [^ ]+ --- error -[0-9]+"),
+				"kernel panic: Couldn't open N_TTY ldisc",
+			},
+			{
 				compile("Kernel panic - not syncing: (.*)"),
 				"kernel panic: %[1]v",
 			},
@@ -185,6 +277,16 @@ var oopses = []*oops{
 			{
 				compile("Kernel BUG (.*)"),
 				"kernel BUG %[1]v",
+			},
+		},
+		[]*regexp.Regexp{},
+	},
+	&oops{
+		[]byte("BUG kmalloc-"),
+		[]oopsFormat{
+			{
+				compile("BUG kmalloc-.*: Object already free"),
+				"BUG: Object already free",
 			},
 		},
 		[]*regexp.Regexp{},
@@ -238,6 +340,11 @@ var (
 	consoleOutputRe = regexp.MustCompile(`^(?:\<[0-9]+\>)?\[ *[0-9]+\.[0-9]+\] `)
 	questionableRe  = regexp.MustCompile(`(?:\[\<[0-9a-f]+\>\])? \? +[a-zA-Z0-9_.]+\+0x[0-9a-f]+/[0-9a-f]+`)
 	symbolizeRe     = regexp.MustCompile(`(?:\[\<(?:[0-9a-f]+)\>\])? +(?:[0-9]+:)?([a-zA-Z0-9_.]+)\+0x([0-9a-f]+)/0x([0-9a-f]+)`)
+	decNumRe        = regexp.MustCompile(`[0-9]{5,}`)
+	addrRe          = regexp.MustCompile(`[0-9a-f]{8,}`)
+	funcRe          = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9_.]+)\+0x[0-9a-z]+/0x[0-9a-z]+`)
+	cpuRe           = regexp.MustCompile(`CPU#[0-9]+`)
+	executorRe      = regexp.MustCompile(`syz-executor[0-9]+((/|:)[0-9]+)?`)
 	eoi             = []byte("<EOI>")
 )
 
@@ -276,6 +383,7 @@ func ContainsCrash(output []byte, ignores []*regexp.Regexp) bool {
 // start and end denote region of output with oops message(s).
 func Parse(output []byte, ignores []*regexp.Regexp) (desc string, text []byte, start int, end int) {
 	var oops *oops
+	var textPrefix [][]byte
 	for pos := 0; pos < len(output); {
 		next := bytes.IndexByte(output[pos:], '\n')
 		if next != -1 {
@@ -295,14 +403,26 @@ func Parse(output []byte, ignores []*regexp.Regexp) (desc string, text []byte, s
 			}
 			end = next
 		}
-		if oops != nil {
-			if consoleOutputRe.Match(output[pos:next]) &&
-				(!questionableRe.Match(output[pos:next]) || bytes.Index(output[pos:next], eoi) != -1) {
-				lineStart := bytes.Index(output[pos:next], []byte("] ")) + pos + 2
-				lineEnd := next
-				if lineEnd != 0 && output[lineEnd-1] == '\r' {
-					lineEnd--
+		if consoleOutputRe.Match(output[pos:next]) &&
+			(!questionableRe.Match(output[pos:next]) || bytes.Index(output[pos:next], eoi) != -1) {
+			lineStart := bytes.Index(output[pos:next], []byte("] ")) + pos + 2
+			lineEnd := next
+			if lineEnd != 0 && output[lineEnd-1] == '\r' {
+				lineEnd--
+			}
+			if oops == nil {
+				textPrefix = append(textPrefix, append([]byte{}, output[lineStart:lineEnd]...))
+				if len(textPrefix) > 5 {
+					textPrefix = textPrefix[1:]
 				}
+			} else {
+				// Prepend 5 lines preceding start of the report,
+				// they can contain additional info related to the report.
+				for _, prefix := range textPrefix {
+					text = append(text, prefix...)
+					text = append(text, '\n')
+				}
+				textPrefix = nil
 				text = append(text, output[lineStart:lineEnd]...)
 				text = append(text, '\n')
 			}
@@ -316,10 +436,45 @@ func Parse(output []byte, ignores []*regexp.Regexp) (desc string, text []byte, s
 	if len(desc) > 0 && desc[len(desc)-1] == '\r' {
 		desc = desc[:len(desc)-1]
 	}
+	// Executor PIDs are not interesting.
+	desc = executorRe.ReplaceAllLiteralString(desc, "syz-executor")
+	// Replace that everything looks like an address with "ADDR",
+	// addresses in descriptions can't be good regardless of the oops regexps.
+	desc = addrRe.ReplaceAllLiteralString(desc, "ADDR")
+	// Replace that everything looks like a decimal number with "NUM".
+	desc = decNumRe.ReplaceAllLiteralString(desc, "NUM")
+	// Replace all raw references to runctions (e.g. "ip6_fragment+0x1052/0x2d80")
+	// with just function name ("ip6_fragment"). Offsets and sizes are not stable.
+	desc = funcRe.ReplaceAllString(desc, "$1")
+	// CPU numbers are not interesting.
+	desc = cpuRe.ReplaceAllLiteralString(desc, "CPU")
 	// Corrupted/intermixed lines can be very long.
 	const maxDescLen = 180
 	if len(desc) > maxDescLen {
 		desc = desc[:maxDescLen]
+	}
+	return
+}
+
+func ExtractConsoleOutput(output []byte) (result []byte) {
+	for pos := 0; pos < len(output); {
+		next := bytes.IndexByte(output[pos:], '\n')
+		if next != -1 {
+			next += pos
+		} else {
+			next = len(output)
+		}
+		if consoleOutputRe.Match(output[pos:next]) &&
+			(!questionableRe.Match(output[pos:next]) || bytes.Index(output[pos:next], eoi) != -1) {
+			lineStart := bytes.Index(output[pos:next], []byte("] ")) + pos + 2
+			lineEnd := next
+			if lineEnd != 0 && output[lineEnd-1] == '\r' {
+				lineEnd--
+			}
+			result = append(result, output[lineStart:lineEnd]...)
+			result = append(result, '\n')
+		}
+		pos = next + 1
 	}
 	return
 }
@@ -376,11 +531,14 @@ func extractDescription(output []byte, oops *oops) string {
 	return string(output[pos:end])
 }
 
-func Symbolize(vmlinux string, text []byte) ([]byte, error) {
+func Symbolize(vmlinux string, text []byte, symbols map[string][]symbolizer.Symbol) ([]byte, error) {
 	var symbolized []byte
-	symbols, err := symbolizer.ReadSymbols(vmlinux)
-	if err != nil {
-		return nil, err
+	if symbols == nil {
+		var err error
+		symbols, err = symbolizer.ReadSymbols(vmlinux)
+		if err != nil {
+			return nil, err
+		}
 	}
 	symb := symbolizer.NewSymbolizer()
 	defer symb.Close()

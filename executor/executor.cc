@@ -58,6 +58,7 @@ const uint64_t instr_copyout = -3;
 const uint64_t arg_const = 0;
 const uint64_t arg_result = 1;
 const uint64_t arg_data = 2;
+const uint64_t arg_csum = 3;
 
 // We use the default value instead of results of failed syscalls.
 // -1 is an invalid fd and an invalid address and deterministic,
@@ -76,9 +77,14 @@ bool flag_collide;
 bool flag_sandbox_privs;
 sandbox_type flag_sandbox;
 bool flag_enable_tun;
+bool flag_enable_fault_injection;
 
 bool flag_collect_cover;
 bool flag_dedup_cover;
+// Inject fault into flag_fault_nth-th operation in flag_fault_call-th syscall.
+bool flag_inject_fault;
+int flag_fault_call;
+int flag_fault_nth;
 
 __attribute__((aligned(64 << 10))) char input_data[kMaxInput];
 uint32_t* output_data;
@@ -111,10 +117,18 @@ struct thread_t {
 	uint64_t res;
 	uint64_t reserrno;
 	uint64_t cover_size;
+	bool fault_injected;
 	int cover_fd;
 };
 
 thread_t threads[kMaxThreads];
+
+// Checksum kinds.
+const uint64_t arg_csum_inet = 0;
+
+// Checksum chunk kinds.
+const uint64_t arg_csum_chunk_data = 0;
+const uint64_t arg_csum_chunk_const = 1;
 
 void execute_one();
 uint64_t read_input(uint64_t** input_posp, bool peek = false);
@@ -128,7 +142,6 @@ void execute_call(thread_t* th);
 void handle_completion(thread_t* th);
 void thread_create(thread_t* th, int id);
 void* worker_thread(void* arg);
-bool write_file(const char* file, const char* what, ...);
 void cover_open();
 void cover_enable(thread_t* th);
 void cover_reset(thread_t* th);
@@ -169,10 +182,12 @@ int main(int argc, char** argv)
 	if (!flag_threaded)
 		flag_collide = false;
 	flag_enable_tun = flags & (1 << 6);
-	uint64_t executor_pid = *((uint64_t*)input_data + 1);
+	flag_enable_fault_injection = flags & (1 << 7);
 
+	uint64_t executor_pid = *((uint64_t*)input_data + 1);
 	cover_open();
-	setup_main_process();
+	install_segv_handler();
+	use_temporary_dir();
 
 	int pid = -1;
 	switch (flag_sandbox) {
@@ -195,6 +210,16 @@ int main(int argc, char** argv)
 	while (waitpid(-1, &status, __WALL) != pid) {
 	}
 	status = WEXITSTATUS(status);
+	// If an external sandbox process wraps executor, the out pipe will be closed
+	// before the sandbox process exits this will make ipc package kill the sandbox.
+	// As the result sandbox process will exit with exit status 9 instead of the executor
+	// exit status (notably kRetryStatus). Consequently, ipc will treat it as hard
+	// failure rather than a temporal failure. So we duplicate the exit status on the pipe.
+	char tmp = status;
+	if (write(kOutPipeFd, &tmp, 1)) {
+		// Not much we can do, but gcc wants us to check the return value.
+	}
+	errno = 0;
 	if (status == kFailStatus)
 		fail("loop failed");
 	if (status == kErrorStatus)
@@ -203,7 +228,8 @@ int main(int argc, char** argv)
 	// ptrace(PTRACE_SEIZE, 1, 0, 0x100040)
 	// This is unfortunate, but I don't have a better solution than ignoring it for now.
 	exitf("loop exited with status %d", status);
-	return 0;
+	// Unreachable.
+	return 1;
 }
 
 void loop()
@@ -225,11 +251,16 @@ void loop()
 		// TODO: consider moving the read into the child.
 		// Potentially it can speed up things a bit -- when the read finishes
 		// we already have a forked worker process.
-		char flags = 0;
-		if (read(kInPipeFd, &flags, 1) != 1)
+		uint64_t in_cmd[3] = {};
+		if (read(kInPipeFd, &in_cmd[0], sizeof(in_cmd)) != (ssize_t)sizeof(in_cmd))
 			fail("control pipe read failed");
-		flag_collect_cover = flags & (1 << 0);
-		flag_dedup_cover = flags & (1 << 1);
+		flag_collect_cover = in_cmd[0] & (1 << 0);
+		flag_dedup_cover = in_cmd[0] & (1 << 1);
+		flag_inject_fault = in_cmd[0] & (1 << 2);
+		flag_fault_call = in_cmd[1];
+		flag_fault_nth = in_cmd[2];
+		debug("exec opts: cover=%d dedup=%d fault=%d/%d/%d\n", flag_collect_cover, flag_dedup_cover,
+		      flag_inject_fault, flag_fault_call, flag_fault_nth);
 
 		int pid = fork();
 		if (pid < 0)
@@ -241,6 +272,11 @@ void loop()
 				fail("failed to chdir");
 			close(kInPipeFd);
 			close(kOutPipeFd);
+			if (flag_enable_tun) {
+				// Read all remaining packets from tun to better
+				// isolate consequently executing programs.
+				flush_tun();
+			}
 			execute_one();
 			debug("worker exiting\n");
 			doexit(0);
@@ -280,7 +316,7 @@ void loop()
 				executed_calls = now_executed;
 				last_executed = now;
 			}
-			if ((now - start < 3 * 1000) && (now - last_executed < 200))
+			if ((now - start < 3 * 1000) && (now - last_executed < 500))
 				continue;
 			debug("waitpid(%d)=%d (%d)\n", pid, res, errno0);
 			debug("killing\n");
@@ -347,6 +383,52 @@ retry:
 					read_input(&input_pos);
 				break;
 			}
+			case arg_csum: {
+				debug("checksum found at %llx\n", addr);
+				char* csum_addr = addr;
+				uint64_t csum_size = size;
+				uint64_t csum_kind = read_input(&input_pos);
+				switch (csum_kind) {
+				case arg_csum_inet: {
+					if (csum_size != 2) {
+						fail("inet checksum must be 2 bytes, not %lu", size);
+					}
+					debug("calculating checksum for %llx\n", csum_addr);
+					struct csum_inet csum;
+					csum_inet_init(&csum);
+					uint64_t chunks_num = read_input(&input_pos);
+					uint64_t chunk;
+					for (chunk = 0; chunk < chunks_num; chunk++) {
+						uint64_t chunk_kind = read_input(&input_pos);
+						uint64_t chunk_value = read_input(&input_pos);
+						uint64_t chunk_size = read_input(&input_pos);
+						switch (chunk_kind) {
+						case arg_csum_chunk_data:
+							debug("#%d: data chunk, addr: %llx, size: %llu\n", chunk, chunk_value, chunk_size);
+							NONFAILING(csum_inet_update(&csum, (const uint8_t*)chunk_value, chunk_size));
+							break;
+						case arg_csum_chunk_const:
+							if (chunk_size != 2 && chunk_size != 4 && chunk_size != 8) {
+								fail("bad checksum const chunk size %lld\n", chunk_size);
+							}
+							// Here we assume that const values come to us big endian.
+							debug("#%d: const chunk, value: %llx, size: %llu\n", chunk, chunk_value, chunk_size);
+							csum_inet_update(&csum, (const uint8_t*)&chunk_value, chunk_size);
+							break;
+						default:
+							fail("bad checksum chunk kind %lu", chunk_kind);
+						}
+					}
+					int16_t csum_value = csum_inet_digest(&csum);
+					debug("writing inet checksum %hx to %llx\n", csum_value, csum_addr);
+					NONFAILING(copyin(csum_addr, csum_value, 2, 0, 0));
+					break;
+				}
+				default:
+					fail("bad checksum kind %lu", csum_kind);
+				}
+				break;
+			}
 			default:
 				fail("bad argument type %lu", typ);
 			}
@@ -379,10 +461,11 @@ retry:
 			// Wait for call completion.
 			uint64_t start = current_time_ms();
 			uint64_t now = start;
+			const uint64_t timeout_ms = flag_debug ? 500 : 20;
 			for (;;) {
 				timespec ts = {};
 				ts.tv_sec = 0;
-				ts.tv_nsec = (20 - (now - start)) * 1000 * 1000;
+				ts.tv_nsec = (timeout_ms - (now - start)) * 1000 * 1000;
 				syscall(SYS_futex, &th->done, FUTEX_WAIT, 0, &ts);
 				if (__atomic_load_n(&th->done, __ATOMIC_RELAXED))
 					break;
@@ -415,7 +498,7 @@ retry:
 		}
 	}
 
-	if (flag_collide && !collide) {
+	if (flag_collide && !flag_inject_fault && !collide) {
 		debug("enabling collider\n");
 		collide = true;
 		goto retry;
@@ -494,8 +577,9 @@ void handle_completion(thread_t* th)
 		write_output(th->call_num);
 		uint32_t reserrno = th->res != (uint64_t)-1 ? 0 : th->reserrno;
 		write_output(reserrno);
+		write_output(th->fault_injected);
 		uint32_t* signal_count_pos = write_output(0); // filled in later
-		uint32_t* cover_count_pos = write_output(0);  // filled in later
+		uint32_t* cover_count_pos = write_output(0); // filled in later
 
 		// Write out feedback signals.
 		// Currently it is code edges computed as xor of two subsequent basic block PCs.
@@ -584,10 +668,32 @@ void execute_call(thread_t* th)
 	}
 	debug(")\n");
 
+	int fail_fd = -1;
+	if (flag_inject_fault && th->call_index == flag_fault_call) {
+		if (collide)
+			fail("both collide and fault injection are enabled");
+		debug("injecting fault into %d-th operation\n", flag_fault_nth);
+		fail_fd = inject_fault(flag_fault_nth);
+	}
+
 	cover_reset(th);
 	th->res = execute_syscall(call->sys_nr, th->args[0], th->args[1], th->args[2], th->args[3], th->args[4], th->args[5], th->args[6], th->args[7], th->args[8]);
 	th->reserrno = errno;
 	th->cover_size = cover_read(th);
+	th->fault_injected = false;
+
+	if (flag_inject_fault && th->call_index == flag_fault_call) {
+		char buf[16];
+		int n = read(fail_fd, buf, sizeof(buf) - 1);
+		if (n <= 0)
+			fail("failed to read /proc/self/task/tid/fail-nth");
+		th->fault_injected = n == 2 && buf[0] == '0' && buf[1] == '\n';
+		buf[0] = '0';
+		if (write(fail_fd, buf, 1) != 1)
+			fail("failed to write /proc/self/task/tid/fail-nth");
+		close(fail_fd);
+		debug("fault injected: %d\n", th->fault_injected);
+	}
 
 	if (th->res == (uint64_t)-1)
 		debug("#%d: %s = errno(%ld)\n", th->id, call->name, th->reserrno);
@@ -619,8 +725,12 @@ void cover_enable(thread_t* th)
 	if (!flag_cover)
 		return;
 	debug("#%d: enabling /sys/kernel/debug/kcov\n", th->id);
-	if (ioctl(th->cover_fd, KCOV_ENABLE, 0))
-		fail("cover enable write failed");
+	if (ioctl(th->cover_fd, KCOV_ENABLE, 0)) {
+		// This should be fatal,
+		// but in practice ioctl fails with assorted errors (9, 14, 25),
+		// so we use exitf.
+		exitf("cover enable write failed");
+	}
 	debug("#%d: enabled /sys/kernel/debug/kcov\n", th->id);
 }
 

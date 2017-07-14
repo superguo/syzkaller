@@ -7,53 +7,76 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"reflect"
 	"testing"
 	"time"
 
-	"github.com/google/syzkaller/fileutil"
+	"github.com/google/syzkaller/pkg/fileutil"
 	"github.com/google/syzkaller/prog"
 )
 
 func initTest(t *testing.T) (rand.Source, int) {
-	iters := 10
-	if testing.Short() {
-		iters = 1
-	}
+	t.Parallel()
+	iters := 1
 	seed := int64(time.Now().UnixNano())
 	rs := rand.NewSource(seed)
 	t.Logf("seed=%v", seed)
 	return rs, iters
 }
 
-func allOptionsPermutations() []Options {
-	var options []Options
-	var opt Options
-	for _, opt.Threaded = range []bool{false, true} {
-		for _, opt.Collide = range []bool{false, true} {
-			for _, opt.Repeat = range []bool{false, true} {
-				for _, opt.Repro = range []bool{false, true} {
-					for _, opt.Procs = range []int{1, 4} {
-						for _, opt.Sandbox = range []string{"none", "setuid", "namespace"} {
-							if opt.Collide && !opt.Threaded {
-								continue
-							}
-							if !opt.Repeat && opt.Procs != 1 {
-								continue
-							}
-							if testing.Short() && opt.Procs != 1 {
-								continue
-							}
-							options = append(options, opt)
-						}
-					}
-				}
-			}
+func enumerateField(opt Options, field int) []Options {
+	var opts []Options
+	s := reflect.ValueOf(&opt).Elem()
+	fldName := s.Type().Field(field).Name
+	fld := s.Field(field)
+	if fldName == "Sandbox" {
+		for _, sandbox := range []string{"", "none", "setuid", "namespace"} {
+			fld.SetString(sandbox)
+			opts = append(opts, opt)
 		}
+	} else if fldName == "Procs" {
+		for _, procs := range []int64{1, 4} {
+			fld.SetInt(procs)
+			opts = append(opts, opt)
+		}
+	} else if fldName == "FaultCall" {
+		opts = append(opts, opt)
+	} else if fldName == "FaultNth" {
+		opts = append(opts, opt)
+	} else if fld.Kind() == reflect.Bool {
+		for _, v := range []bool{false, true} {
+			fld.SetBool(v)
+			opts = append(opts, opt)
+		}
+	} else {
+		panic(fmt.Sprintf("field '%v' is not boolean", fldName))
 	}
-	return options
+	return opts
 }
 
-func TestSyz(t *testing.T) {
+func allOptionsSingle() []Options {
+	var opts []Options
+	fields := reflect.TypeOf(Options{}).NumField()
+	for i := 0; i < fields; i++ {
+		opts = append(opts, enumerateField(Options{}, i)...)
+	}
+	return opts
+}
+
+func allOptionsPermutations() []Options {
+	opts := []Options{Options{}}
+	fields := reflect.TypeOf(Options{}).NumField()
+	for i := 0; i < fields; i++ {
+		var newOpts []Options
+		for _, opt := range opts {
+			newOpts = append(newOpts, enumerateField(opt, i)...)
+		}
+		opts = newOpts
+	}
+	return opts
+}
+
+func TestOne(t *testing.T) {
 	rs, _ := initTest(t)
 	opts := Options{
 		Threaded: true,
@@ -67,12 +90,23 @@ func TestSyz(t *testing.T) {
 	testOne(t, p, opts)
 }
 
-func Test(t *testing.T) {
-	rs, iters := initTest(t)
+func TestOptions(t *testing.T) {
+	rs, _ := initTest(t)
 	syzProg := prog.GenerateAllSyzProg(rs)
 	t.Logf("syz program:\n%s\n", syzProg.Serialize())
-	for i, opts := range allOptionsPermutations() {
+	permutations := allOptionsSingle()
+	allPermutations := allOptionsPermutations()
+	if testing.Short() {
+		r := rand.New(rs)
+		for i := 0; i < 32; i++ {
+			permutations = append(permutations, allPermutations[r.Intn(len(allPermutations))])
+		}
+	} else {
+		permutations = append(permutations, allPermutations...)
+	}
+	for i, opts := range permutations {
 		t.Run(fmt.Sprintf("%v", i), func(t *testing.T) {
+			rs, iters := initTest(t)
 			t.Logf("opts: %+v", opts)
 			for i := 0; i < iters; i++ {
 				p := prog.Generate(rs, 10, nil)

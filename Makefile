@@ -25,8 +25,8 @@ manager:
 	go build -o ./bin/syz-manager github.com/google/syzkaller/syz-manager
 
 fuzzer:
-	#go build -o ./bin/syz-fuzzer github.com/google/syzkaller/syz-fuzzer
-	go build -o ./bin/syz-fuzzer --ldflags '-linkmode external -extldflags "-static"' syz-fuzzer/fuzzer.go
+	#go build $(GOFLAGS) -o ./bin/syz-fuzzer github.com/google/syzkaller/syz-fuzzer
+	go build $(GOFLAGS) -o ./bin/syz-fuzzer --ldflags '-linkmode external -extldflags "-static"' syz-fuzzer/fuzzer.go
 
 execprog:
 	go build -o ./bin/syz-execprog github.com/google/syzkaller/tools/syz-execprog

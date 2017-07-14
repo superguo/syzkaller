@@ -97,6 +97,7 @@ vmsplice(fd fd, vec ptr[in, array[iovec_in]], vlen len[vec], f flags[splice_flag
 sendfile(fdout fd, fdin fd, off ptr[inout, fileoff[int64], opt], count int64)
 
 stat(file ptr[in, filename], statbuf ptr[out, stat])
+statx(dfd int64, file ptr[in, filename], flags flags[statx_flags], mask flags[statx_mask], statxbuf ptr[out, statx])
 lstat(file ptr[in, filename], statbuf ptr[out, stat])
 fstat(fd fd, statbuf ptr[out, stat])
 
@@ -245,6 +246,7 @@ mq_getsetattr(mqd fd_mq, attr ptr[in, mq_attr], oldattr ptr[out, mq_attr, opt])
 mq_unlink(name ptr[in, string])
 
 mknod(file ptr[in, filename], mode flags[mknod_mode], dev int32)
+mknod$loop(file ptr[in, filename], mode flags[mknod_mode], dev proc[1792, 2])
 mknodat(dirfd fd_dir, file ptr[in, filename], mode flags[mknod_mode], dev int32)
 chmod(file ptr[in, filename], mode flags[open_mode])
 fchmod(fd fd, mode flags[open_mode])
@@ -330,8 +332,7 @@ getdents64(fd fd_dir, ent buffer[out], count len[ent])
 name_to_handle_at(fd fd_dir, file ptr[in, filename], handle ptr[in, file_handle], mnt ptr[out, int32], flags flags[name_to_handle_at_flags])
 open_by_handle_at(mountdirfd fd, handle ptr[in, file_handle], flags flags[open_flags])
 
-mount(src ptr[in, filename], dst ptr[in, filename], type ptr[in, string[filesystem]], flags flags[mount_flags], data buffer[in])
-mount$fs(src ptr[in, string[filesystem]], dst ptr[in, filename], type ptr[in, string[filesystem]], flags flags[mount_flags], data buffer[in])
+mount(src ptr[in, filename], dst ptr[in, filename], type ptr[in, string[filesystem]], flags flags[mount_flags], data buffer[in, opt])
 umount2(path ptr[in, filename], flags flags[umount_flags])
 pivot_root(new_root ptr[in, filename], put_old ptr[in, filename])
 
@@ -491,7 +492,6 @@ openat$cuse(fd const[AT_FDCWD], file ptr[in, string["/dev/cuse"]], flags flags[o
 openat$capi20(fd const[AT_FDCWD], file ptr[in, string["/dev/capi20"]], flags flags[open_flags], mode const[0]) fd
 openat$autofs(fd const[AT_FDCWD], file ptr[in, string["/dev/autofs"]], flags flags[open_flags], mode const[0]) fd
 openat$binder(fd const[AT_FDCWD], file ptr[in, string["/dev/binder"]], flags flags[open_flags], mode const[0]) fd
-openat$ion(fd const[AT_FDCWD], file ptr[in, string["/dev/ion"]], flags flags[open_flags], mode const[0]) fd
 openat$keychord(fd const[AT_FDCWD], file ptr[in, string["/dev/keychord"]], flags flags[open_flags], mode const[0]) fd
 openat$zygote(fd const[AT_FDCWD], file ptr[in, string["/dev/socket/zygote"]], flags flags[open_flags], mode const[0]) fd
 openat$sw_sync(fd const[AT_FDCWD], file ptr[in, string["/dev/sw_sync"]], flags flags[open_flags], mode const[0]) fd
@@ -544,6 +544,30 @@ stat {
 	pad2	int32
 }
 
+statx {
+	mask int32
+	blksize int32
+	attributes int64
+	nlink int32
+	uid int32
+	gid int32
+	mode int16
+	__spare0 int16
+	ino int64
+	size int64
+	blocks int64
+	__spare1 int64
+	atime statx_timestamp
+	btime statx_timestamp
+	ctime statx_timestamp
+	mtime statx_timestamp
+	rdev_major int32
+	rdev_minor int32
+	dev_major int32
+	dev_minor int32
+	__spare2 array[int64, 14]
+}
+
 pollfd {
 	fd	fd
 	events	flags[pollfd_events, int16]
@@ -563,6 +587,12 @@ sigset_size {
 timespec {
 	sec	intptr
 	nsec	intptr
+}
+
+statx_timestamp {
+	sec  int64
+	nsec int32
+	__reserved  int32
 }
 
 # prog knowns about this struct type
@@ -853,7 +883,7 @@ fiemap_extent {
 
 uffdio_api {
 	api	const[UFFD_API, int64]
-	featur	const[0, int64]
+	featur	flags[uffdio_features, int64]
 	ioctls	const[0, int64]
 }
 
@@ -938,6 +968,8 @@ renameat2_flags = RENAME_EXCHANGE, RENAME_NOREPLACE, RENAME_WHITEOUT
 flock_op = LOCK_SH, LOCK_EX, LOCK_UN, LOCK_NB
 seccomp_op = SECCOMP_SET_MODE_STRICT, SECCOMP_SET_MODE_FILTER
 seccomp_flags = 0, SECCOMP_FILTER_FLAG_TSYNC
+statx_flags = AT_SYMLINK_NOFOLLOW, AT_SYMLINK_FOLLOW, AT_NO_AUTOMOUNT, AT_EMPTY_PATH, AT_STATX_SYNC_TYPE, AT_STATX_SYNC_AS_STAT, AT_STATX_FORCE_SYNC, AT_STATX_DONT_SYNC
+statx_mask = STATX_TYPE, STATX_MODE, STATX_NLINK, STATX_UID, STATX_GID, STATX_ATIME, STATX_MTIME, STATX_CTIME, STATX_INO, STATX_SIZE, STATX_BLOCKS, STATX_BASIC_STATS, STATX_BTIME, STATX_ALL
 name_to_handle_at_flags = AT_EMPTY_PATH, AT_SYMLINK_FOLLOW
 mq_open_flags = O_RDONLY, O_WRONLY, O_RDWR, O_NONBLOCK, O_CREAT, O_EXCL, O_CREAT
 mount_flags = MS_BIND, MS_DIRSYNC, MS_MANDLOCK, MS_MOVE, MS_NOATIME, MS_NODEV, MS_NODIRATIME, MS_NOEXEC, MS_NOSUID, MS_RDONLY, MS_RELATIME, MS_REMOUNT, MS_SILENT, MS_STRICTATIME, MS_SYNCHRONOUS, MS_REC, MS_POSIXACL, MS_UNBINDABLE, MS_PRIVATE, MS_SLAVE, MS_SHARED, MS_I_VERSION, MS_LAZYTIME
@@ -1003,6 +1035,7 @@ ioctl_int_out = FIOQSIZE, FIGETBSZ
 fiemap_flags = FIEMAP_FLAG_SYNC, FIEMAP_FLAG_XATTR, FIEMAP_FLAG_CACHE
 fiemap_extent_flags = FIEMAP_EXTENT_LAST, FIEMAP_EXTENT_UNKNOWN, FIEMAP_EXTENT_DELALLOC, FIEMAP_EXTENT_ENCODED, FIEMAP_EXTENT_DATA_ENCRYPTED, FIEMAP_EXTENT_NOT_ALIGNED, FIEMAP_EXTENT_DATA_INLINE, FIEMAP_EXTENT_DATA_TAIL, FIEMAP_EXTENT_UNWRITTEN, FIEMAP_EXTENT_MERGED, FIEMAP_EXTENT_SHARED
 getrandom_flags = GRND_NONBLOCK, GRND_RANDOM
+uffdio_features = UFFD_FEATURE_PAGEFAULT_FLAG_WP, UFFD_FEATURE_EVENT_FORK, UFFD_FEATURE_EVENT_REMAP, UFFD_FEATURE_EVENT_REMOVE, UFFD_FEATURE_MISSING_HUGETLBFS, UFFD_FEATURE_MISSING_SHMEM, UFFD_FEATURE_EVENT_UNMAP
 
 
 

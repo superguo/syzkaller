@@ -1,50 +1,52 @@
 # syzkaller - linux syscall fuzzer
 
 `syzkaller` is an unsupervised, coverage-guided Linux syscall fuzzer.
-It is meant to be used with [KASAN](https://kernel.org/doc/html/latest/dev-tools/kasan.html) (`CONFIG_KASAN=y`),
-[KTSAN](https://github.com/google/ktsan) (`CONFIG_KTSAN=y`),
-or [KUBSAN](https://kernel.org/doc/html/latest/dev-tools/ubsan.html).
+It is meant to be used with
+[KASAN](https://kernel.org/doc/html/latest/dev-tools/kasan.html) (available upstream with `CONFIG_KASAN=y`),
+[KTSAN](https://github.com/google/ktsan) (prototype available),
+[KMSAN](https://github.com/google/kmsan) (prototype available),
+or [KUBSAN](https://kernel.org/doc/html/latest/dev-tools/ubsan.html) (available upstream with `CONFIG_UBSAN=y`).
 
-Project mailing list: [syzkaller@googlegroups.com](https://groups.google.com/forum/#!forum/syzkaller), which you can subscribe to either with an
-google account or by sending an email to syzkaller+subscribe@googlegroups.com.
+Project mailing list: [syzkaller@googlegroups.com](https://groups.google.com/forum/#!forum/syzkaller).
+You can subscribe to it with a google account or by sending an email to syzkaller+subscribe@googlegroups.com.
 
 List of [found bugs](https://github.com/google/syzkaller/wiki/Found-Bugs).
 
+How to [report Linux kernel bugs](https://github.com/google/syzkaller/wiki/How-to-report-kernel-bugs).
+
 ## Usage
 
-Various components are needed to build and run syzkaller.
+The following components are needed to use syzkaller:
 
  - C compiler with coverage support
  - Linux kernel with coverage additions
- - QEMU and disk image
- - The syzkaller components
+ - Virtual machine or a physical device
+ - syzkaller itself
 
-Setting each of these up is discussed in the following sections.
+Generic steps to set up syzkaller are described below.
+More specific information (like the exact steps for a particular host system, VM type and a kernel architecture) can be found on [the wiki](https://github.com/google/syzkaller/wiki).
 
 ### C Compiler
 
-Syzkaller is a coverage-guided fuzzer and so needs the kernel to be built with coverage support.
-Therefore, a recent version of GCC is needed. Coverage support is submitted to gcc in
-revision `231296`, released in gcc6.
+Syzkaller is a coverage-guided fuzzer and therefore it needs the kernel to be built with coverage support, which requires a recent GCC version.
+Coverage support was submitted to GCC in revision `231296`, released in GCC v6.0.
 
 ### Linux Kernel
 
-As well as adding coverage support to the C compiler, the Linux kernel itself needs to be modified
-to:
- - add support in the build system for the coverage options (under `CONFIG_KCOV`)
- - add extra instrumentation on system call entry/exit (for a `CONFIG_KCOV` build)
- - add code to track and report per-task coverage information.
+Besides coverage support in GCC, you also need support for it on the kernel side.
+KCOV was committed upstream in Linux kernel version 4.6 and can be enabled by configuring the kernel with `CONFIG_KCOV=y`.
+For older kernels you need to backport commit [kernel: add kcov code coverage](https://github.com/torvalds/linux/commit/5c9a8750a6409c63a0f01d51a9024861022f6593).
 
-KCOV is upstreamed in linux 4.6. For older kernels you need to backport commit [5c9a8750a6409c63a0f01d51a9024861022f6593](https://github.com/torvalds/linux/commit/5c9a8750a6409c63a0f01d51a9024861022f6593). The kernel should be configured with `CONFIG_KCOV`.
+To enable more syzkaller features and improve bug detection abilities, it's recommended to use additional config options.
+See [Kernel configs](https://github.com/google/syzkaller/wiki/Kernel-configs) for details.
 
-See [Kernel configs](https://github.com/google/syzkaller/wiki/Kernel-configs) for details on configuring kernel.
+### VM Setup
 
-### QEMU Setup
+Syzkaller performs kernel fuzzing on slave virtual machines or physical devices.
+These slave enviroments are referred to as VMs.
+Out-of-the-box syzkaller supports QEMU, kvmtool and GCE virtual machines, Android devices and Odroid C2 boards.
 
-Syzkaller runs its fuzzer processes inside QEMU virtual machines, so a working QEMU system is needed
-&ndash; see [QEMU docs](http://wiki.qemu.org/Manual) for details.
-
-In particular:
+These are the generic requirements for a syzkaller VM:
 
  - The fuzzing processes communicate with the outside world, so the VM image needs to include
    networking support.
@@ -58,13 +60,15 @@ In particular:
  - The kernel exports coverage information via a debugfs entry, so the VM image needs to mount
    the debugfs filesystem at `/sys/kernel/debug`.
 
-[create-image.sh](tools/create-image.sh) script can be used to create a suitable Linux image.
+To use QEMU syzkaller VMs you have to install QEMU on your host system, see [QEMU docs](http://wiki.qemu.org/Manual) for details.
+The [create-image.sh](tools/create-image.sh) script can be used to create a suitable Linux image.
+Detailed steps for setting up syzkaller with QEMU on a Linux host can be found on wiki for [x86-64](https://github.com/google/syzkaller/wiki/Setup:-Ubuntu-host,-QEMU-vm,-x86_64-kernel) and [arm64](https://github.com/google/syzkaller/wiki/Setup:-Linux-host,-QEMU-vm,-arm64-kernel) kernels.
 
-Syzkaller also supports kvmtool VMs, GCE VMs and running on real android devices. TODO: Describe how to support other types of VMs.
+For some details on fuzzing the kernel on an Android device check out [this wiki page](https://github.com/google/syzkaller/wiki/Setup:-Linux-host,-Android-device,-arm64-kernel) and the explicit instructions for an Odroid C2 board are available [here](https://github.com/google/syzkaller/wiki/Setup:-Ubuntu-host,-Odroid-C2-board,-arm64-kernel).
 
 ### Syzkaller
 
-The syzkaller tools are written in [Go](https://golang.org), so a Go compiler (>= 1.7) is needed
+The syzkaller tools are written in [Go](https://golang.org), so a Go compiler (>= 1.8) is needed
 to build them.
 
 Go distribution can be downloaded from https://golang.org/dl/.
@@ -72,48 +76,51 @@ Unpack Go into a directory, say, `$HOME/go`.
 Then, set `GOROOT=$HOME/go` env var.
 Then, add Go binaries to `PATH`, `PATH=$HOME/go/bin:$PATH`.
 Then, set `GOPATH` env var to some empty dir, say `GOPATH=$HOME/gopath`.
-Then, run `go get -d github.com/google/syzkaller/...` to checkout syzkaller sources with all dependencies.
+Then, run `go get -u -d github.com/google/syzkaller/...` to checkout syzkaller sources with all dependencies.
 Then, `cd $GOPATH/src/github.com/google/syzkaller` and
 build with `make`, which generates compiled binaries in the `bin/` folder.
+
+To build additional syzkaller tools run `make all-tools`.
 
 ## Configuration
 
 The operation of the syzkaller `syz-manager` process is governed by a configuration file, passed at
 invocation time with the `-config` option.  This configuration can be based on the
-[syz-manager/example.cfg](syz-manager/example.cfg); the file is in JSON format with the
+[example](syz-manager/config/testdata/qemu.cfg); the file is in JSON format with the
 following keys in its top-level object:
 
  - `http`: URL that will display information about the running `syz-manager` process.
  - `workdir`: Location of a working directory for the `syz-manager` process. Outputs here include:
-     - `<workdir>/instance-x`: per VM instance temporary files
      - `<workdir>/crashes/*`: crash output files (see [Crash Reports](#crash-reports))
-     - `<workdir>/corpus/*`: corpus with interesting programs
+     - `<workdir>/corpus.db`: corpus with interesting programs
+     - `<workdir>/instance-x`: per VM instance temporary files
  - `syzkaller`: Location of the `syzkaller` checkout.
  - `vmlinux`: Location of the `vmlinux` file that corresponds to the kernel being tested.
- - `type`: Type of virtual machine to use, e.g. `qemu` or `kvm`.
- - `count`: Number of VMs to run in parallel.
  - `procs`: Number of parallel test processes in each VM (4 or 8 would be a reasonable number).
- - `leak`: Detect memory leaks with kmemleak (very slow).
- - `kernel`: Location of the `bzImage` file for the kernel to be tested; this is passed as the
-   `-kernel` option to `qemu-system-x86_64`.
- - `cmdline`: Additional command line options for the booting kernel, for example `root=/dev/sda1`.
+ - `leak`: Detect memory leaks with kmemleak.
  - `image`: Location of the disk image file for the QEMU instance; a copy of this file is passed as the
    `-hda` option to `qemu-system-x86_64`.
- - `sshkey`: Location (on the host machine) of an SSH identity to use for communicating with
-   the virtual machine.
- - `cpu`: Number of CPUs to simulate in the VM (*not currently used*).
- - `mem`: Amount of memory (in MiB) for the VM; this is passed as the `-m` option to `qemu-system-x86_64`.
- - `sandbox` : Sandboxing mode, one of "none", "setuid", "namespace".
-     "none": don't do anything special (has false positives, e.g. due to killing init)
-     "setuid": impersonate into user nobody (65534), default
-     "namespace": use namespaces to drop privileges,
-     (requires a kernel built with `CONFIG_NAMESPACES`, `CONFIG_UTS_NS`,
-     `CONFIG_USER_NS`, `CONFIG_PID_NS` and `CONFIG_NET_NS`).
+ - `sandbox` : Sandboxing mode, the following modes are supported:
+     - "none": don't do anything special (has false positives, e.g. due to killing init)
+     - "setuid": impersonate into user nobody (65534), default
+     - "namespace": use namespaces to drop privileges
+       (requires a kernel built with `CONFIG_NAMESPACES`, `CONFIG_UTS_NS`,
+       `CONFIG_USER_NS`, `CONFIG_PID_NS` and `CONFIG_NET_NS`)
  - `enable_syscalls`: List of syscalls to test (optional).
  - `disable_syscalls`: List of system calls that should be treated as disabled (optional).
  - `suppressions`: List of regexps for known bugs.
+ - `type`: Type of virtual machine to use, e.g. `qemu` or `adb`.
+ - `vm`: object with VM-type-specific parameters; for example, for `qemu` type paramters include:
+     - `count`: Number of VMs to run in parallel.
+     - `kernel`: Location of the `bzImage` file for the kernel to be tested;
+       this is passed as the `-kernel` option to `qemu-system-x86_64`.
+     - `cmdline`: Additional command line options for the booting kernel, for example `root=/dev/sda1`.
+     - `sshkey`: Location (on the host machine) of an SSH identity to use for communicating with
+       the virtual machine.
+     - `cpu`: Number of CPUs to simulate in the VM (*not currently used*).
+     - `mem`: Amount of memory (in MiB) for the VM; this is passed as the `-m` option to `qemu-system-x86_64`.
 
-See also [config/config.go](config/config.go) for all config parameters.
+See also [config.go](syz-manager/config/config.go) for all config parameters.
 
 
 ## Running syzkaller
@@ -123,17 +130,16 @@ Start the `syz-manager` process as:
 ./bin/syz-manager -config my.cfg
 ```
 
-The `-config` command line option gives the location of the configuration file
-[described above](#configuration).
+The `-config` command line option gives the location of the configuration file [described above](#configuration).
 
-The `syz-manager` process will wind up qemu virtual machines and start fuzzing in them.
-It also reports some statistics on the HTTP address.
+The `syz-manager` process will wind up QEMU virtual machines and start fuzzing in them.
+Found crashes, statistics and other information is exposed on the HTTP address provided in manager config.
 
 
 ## Process Structure
 
-The process structure for the syzkaller system is shown in the following diagram; red labels
-indicate corresponding configuration options.
+The process structure for the syzkaller system is shown in the following diagram;
+red labels indicate corresponding configuration options.
 
 ![Process structure for syzkaller](structure.png?raw=true)
 
@@ -173,7 +179,7 @@ When `syzkaller` finds a crasher, it saves information about it into `workdir/cr
 
 Descriptions are extracted using a set of [regular expressions](report/report.go#L33). This set may need to be extended if you are using a different kernel architecture, or are just seeing a previously unseen kernel error messages.
 
-`logN` files contain raw `syzkaller` logs and include kernel console output as well as programs executed before the crash. These logs can be fed to `syz-repro` tool for [crash location and minimization](https://github.com/google/syzkaller/wiki/Crash-reproducer-programs), or to `syz-execprog` tool for [manual localization](https://github.com/google/syzkaller/wiki/How-to-execute-syzkaller-programs). `reportN` files contain post-processed and symbolized kernel crash reports (e.g. a KASAN report). Normally you need just 1 pair of these files (i.e. `log0` and `report0`), because they all presumably describe the same kernel bug. However, `syzkaller` saves up to 100 of them for the case when the crash is poorly reproducible, or if you just want to look at a set of crash reports to infer some similarities or differences.
+`logN` files contain raw `syzkaller` logs and include kernel console output as well as programs executed before the crash. These logs can be fed to `syz-repro` tool for [crash location and minimization](https://github.com/google/syzkaller/wiki/Tools:-execprog,-prog2c,-repro), or to `syz-execprog` tool for [manual localization](https://github.com/google/syzkaller/wiki/How-to-execute-syzkaller-programs). `reportN` files contain post-processed and symbolized kernel crash reports (e.g. a KASAN report). Normally you need just 1 pair of these files (i.e. `log0` and `report0`), because they all presumably describe the same kernel bug. However, `syzkaller` saves up to 100 of them for the case when the crash is poorly reproducible, or if you just want to look at a set of crash reports to infer some similarities or differences.
 
 There are 3 special types of crashes:
  - `no output from test machine`: the test machine produces no output whatsoever
@@ -232,10 +238,13 @@ Here are some things to check if there are problems running syzkaller.
 
 ## External Articles
 
+ - [Kernel QA with syzkaller and qemu](https://github.com/hardenedlinux/Debian-GNU-Linux-Profiles/blob/master/docs/harbian_qa/fuzz_testing/syzkaller_general.md) (tutorial on how to setup syzkaller with qemu)
+ - [Syzkaller crash DEMO](https://github.com/hardenedlinux/Debian-GNU-Linux-Profiles/blob/master/docs/harbian_qa/fuzz_testing/syzkaller_crash_demo.md) (tutorial on how to extend syzkaller with new syscalls)
  - [Coverage-guided kernel fuzzing with syzkaller](https://lwn.net/Articles/677764/) (by David Drysdale)
  - [ubsan, kasan, syzkaller und co](http://www.strlen.de/talks/debug-w-syzkaller.pdf) ([video](https://www.youtube.com/watch?v=Acp0A9X1254)) (by Florian Westphal)
  - [Debugging a kernel crash found by syzkaller](http://vegardno.blogspot.de/2016/08/sync-debug.html) (by Quentin Casasnovas)
  - [Linux Plumbers 2016 talk slides](https://docs.google.com/presentation/d/1iAuTvzt_xvDzS2misXwlYko_VDvpvCmDevMOq2rXIcA/edit?usp=sharing)
+ - [syzkaller: the next gen kernel fuzzer](https://www.slideshare.net/DmitryVyukov/syzkaller-the-next-gen-kernel-fuzzer) (basics of operations, tutorial on how to run syzkaller and how to extend it to fuzz new drivers)
 
 ## Contributing
 
