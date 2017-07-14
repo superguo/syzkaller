@@ -9,6 +9,8 @@ import (
 	"io/ioutil"
 	"reflect"
 	"strings"
+
+	"github.com/google/syzkaller/pkg/osutil"
 )
 
 func LoadFile(filename string, cfg interface{}) error {
@@ -30,6 +32,14 @@ func LoadData(data []byte, cfg interface{}) error {
 		return fmt.Errorf("failed to parse config file: %v", err)
 	}
 	return nil
+}
+
+func SaveFile(filename string, cfg interface{}) error {
+	data, err := json.MarshalIndent(cfg, "", "\t")
+	if err != nil {
+		return err
+	}
+	return osutil.WriteFile(filename, data)
 }
 
 func checkUnknownFields(data []byte, typ reflect.Type) error {
@@ -89,6 +99,9 @@ func checkUnknownFieldsStruct(val interface{}, prefix string, typ reflect.Type) 
 		typ = typ.Elem()
 	}
 	if typ.Kind() != reflect.Struct {
+		return nil
+	}
+	if typ.PkgPath() == "time" && typ.Name() == "Time" {
 		return nil
 	}
 	inner, err := json.Marshal(val)

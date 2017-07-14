@@ -19,8 +19,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/syzkaller/cover"
+	"github.com/google/syzkaller/pkg/cover"
 	. "github.com/google/syzkaller/pkg/log"
+	"github.com/google/syzkaller/pkg/osutil"
+	"github.com/google/syzkaller/pkg/report"
 	"github.com/google/syzkaller/prog"
 	"github.com/google/syzkaller/sys"
 )
@@ -250,11 +252,23 @@ func (mgr *Manager) httpReport(w http.ResponseWriter, r *http.Request) {
 	tag, _ := ioutil.ReadFile(filepath.Join(mgr.crashdir, crashID, "repro.tag"))
 	prog, _ := ioutil.ReadFile(filepath.Join(mgr.crashdir, crashID, "repro.prog"))
 	cprog, _ := ioutil.ReadFile(filepath.Join(mgr.crashdir, crashID, "repro.cprog"))
-	report, _ := ioutil.ReadFile(filepath.Join(mgr.crashdir, crashID, "repro.report"))
+	rep, _ := ioutil.ReadFile(filepath.Join(mgr.crashdir, crashID, "repro.report"))
+	log, _ := ioutil.ReadFile(filepath.Join(mgr.crashdir, crashID, "repro.log"))
+	stats, _ := ioutil.ReadFile(filepath.Join(mgr.crashdir, crashID, "repro.stats"))
 
 	fmt.Fprintf(w, "Syzkaller hit '%s' bug on commit %s.\n\n", trimNewLines(desc), trimNewLines(tag))
-	if len(report) != 0 {
-		fmt.Fprintf(w, "%s\n\n", report)
+	if len(rep) != 0 {
+		guiltyFile := report.ExtractGuiltyFile(rep)
+		if guiltyFile != "" {
+			fmt.Fprintf(w, "The guilty file is: %v.\n\n", guiltyFile)
+			maintainers, err := report.GetMaintainers(mgr.cfg.Kernel_Src, guiltyFile)
+			if err == nil {
+				fmt.Fprintf(w, "Maintainers: %v\n\n", maintainers)
+			} else {
+				fmt.Fprintf(w, "Failed to extract maintainers: %v\n\n", err)
+			}
+		}
+		fmt.Fprintf(w, "%s\n\n", rep)
 	}
 	if len(prog) == 0 && len(cprog) == 0 {
 		fmt.Fprintf(w, "The bug is not reproducible.\n")
@@ -263,6 +277,12 @@ func (mgr *Manager) httpReport(w http.ResponseWriter, r *http.Request) {
 		if len(cprog) != 0 {
 			fmt.Fprintf(w, "C reproducer:\n%s\n\n", cprog)
 		}
+	}
+	if len(stats) > 0 {
+		fmt.Fprintf(w, "Reproducing stats:\n%s\n\n", stats)
+	}
+	if len(log) > 0 {
+		fmt.Fprintf(w, "Reproducing log:\n%s\n\n", log)
 	}
 }
 
@@ -344,7 +364,7 @@ func readCrash(workdir, dir string, full bool) *UICrashType {
 			tag, _ := ioutil.ReadFile(filepath.Join(crashdir, dir, "tag"+index))
 			crash.Tag = string(tag)
 			reportFile := filepath.Join("crashes", dir, "report"+index)
-			if _, err := os.Stat(filepath.Join(workdir, reportFile)); err == nil {
+			if osutil.IsExist(filepath.Join(workdir, reportFile)) {
 				crash.Report = reportFile
 			}
 		}

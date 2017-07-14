@@ -7,7 +7,6 @@ package kvm
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,7 +16,6 @@ import (
 	"time"
 
 	"github.com/google/syzkaller/pkg/config"
-	"github.com/google/syzkaller/pkg/fileutil"
 	"github.com/google/syzkaller/pkg/osutil"
 	"github.com/google/syzkaller/vm/vmimpl"
 )
@@ -64,7 +62,7 @@ func ctor(env *vmimpl.Env) (vmimpl.Pool, error) {
 		Lkvm:  "lkvm",
 	}
 	if err := config.LoadData(env.Config, cfg); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to parse kvm vm config: %v", err)
 	}
 	if cfg.Count < 1 || cfg.Count > 1000 {
 		return nil, fmt.Errorf("invalid config param count: %v, want [1, 1000]", cfg.Count)
@@ -78,8 +76,8 @@ func ctor(env *vmimpl.Env) (vmimpl.Pool, error) {
 	if _, err := exec.LookPath(cfg.Lkvm); err != nil {
 		return nil, err
 	}
-	if _, err := os.Stat(cfg.Kernel); err != nil {
-		return nil, fmt.Errorf("kernel file '%v' does not exist: %v", cfg.Kernel, err)
+	if !osutil.IsExist(cfg.Kernel) {
+		return nil, fmt.Errorf("kernel file '%v' does not exist", cfg.Kernel)
 	}
 	if cfg.Cpu < 1 || cfg.Cpu > 1024 {
 		return nil, fmt.Errorf("invalid config param cpu: %v, want [1-1024]", cfg.Cpu)
@@ -121,7 +119,7 @@ func (pool *Pool) Create(workdir string, index int) (vmimpl.Instance, error) {
 		return nil, fmt.Errorf("failed to lkvm setup: %v\n%s", err, out)
 	}
 	scriptPath := filepath.Join(workdir, "script.sh")
-	if err := ioutil.WriteFile(scriptPath, []byte(script), 0700); err != nil {
+	if err := osutil.WriteExecFile(scriptPath, []byte(script)); err != nil {
 		return nil, fmt.Errorf("failed to create temp file: %v", err)
 	}
 
@@ -218,7 +216,7 @@ func (inst *instance) Forward(port int) (string, error) {
 func (inst *instance) Copy(hostSrc string) (string, error) {
 	vmDst := filepath.Join("/", filepath.Base(hostSrc))
 	dst := filepath.Join(inst.sandboxPath, vmDst)
-	if err := fileutil.CopyFile(hostSrc, dst); err != nil {
+	if err := osutil.CopyFile(hostSrc, dst); err != nil {
 		return "", err
 	}
 	if err := os.Chmod(dst, 0777); err != nil {
@@ -237,7 +235,7 @@ func (inst *instance) Run(timeout time.Duration, stop <-chan bool, command strin
 
 	cmdFile := filepath.Join(inst.sandboxPath, "/syz-cmd")
 	tmpFile := cmdFile + "-tmp"
-	if err := ioutil.WriteFile(tmpFile, []byte(command), 0700); err != nil {
+	if err := osutil.WriteExecFile(tmpFile, []byte(command)); err != nil {
 		return nil, nil, err
 	}
 	if err := os.Rename(tmpFile, cmdFile); err != nil {
@@ -268,7 +266,7 @@ func (inst *instance) Run(timeout time.Duration, stop <-chan bool, command strin
 				resultErr = vmimpl.TimeoutErr
 				break loop
 			case <-secondTicker.C:
-				if _, err := os.Stat(cmdFile); err != nil {
+				if !osutil.IsExist(cmdFile) {
 					resultErr = nil
 					break loop
 				}

@@ -12,8 +12,12 @@
 package gce
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"fmt"
+	"io"
 	"io/ioutil"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"time"
@@ -34,7 +38,6 @@ type Config struct {
 	Count        int    // number of VMs to use
 	Machine_Type string // GCE machine type (e.g. "n1-highcpu-2")
 	GCS_Path     string // GCS path to upload image
-	Sshkey       string // root ssh key for the image
 }
 
 type Pool struct {
@@ -47,6 +50,7 @@ type Pool struct {
 type instance struct {
 	cfg     *Config
 	GCE     *gce.Context
+	debug   bool
 	name    string
 	ip      string
 	offset  int64
@@ -68,7 +72,7 @@ func ctor(env *vmimpl.Env) (vmimpl.Pool, error) {
 		Count: 1,
 	}
 	if err := config.LoadData(env.Config, cfg); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to parse gce vm config: %v", err)
 	}
 	if cfg.Count < 1 || cfg.Count > 1000 {
 		return nil, fmt.Errorf("invalid config param count: %v, want [1, 1000]", cfg.Count)
@@ -82,7 +86,6 @@ func ctor(env *vmimpl.Env) (vmimpl.Pool, error) {
 	if cfg.GCS_Path == "" {
 		return nil, fmt.Errorf("gcs_path parameter is empty")
 	}
-	cfg.Sshkey = osutil.Abs(cfg.Sshkey)
 
 	GCE, err := gce.NewContext()
 	if err != nil {
@@ -90,18 +93,14 @@ func ctor(env *vmimpl.Env) (vmimpl.Pool, error) {
 	}
 	Logf(0, "GCE initialized: running on %v, internal IP %v, project %v, zone %v",
 		GCE.Instance, GCE.InternalIP, GCE.ProjectID, GCE.ZoneID)
-	GCS, err := gcs.NewClient()
-	if err != nil {
-		return nil, fmt.Errorf("failed to create GCS client: %v", err)
-	}
-	defer GCS.Close()
+
 	gcsImage := filepath.Join(cfg.GCS_Path, env.Name+"-image.tar.gz")
-	gceImage := env.Name
 	Logf(0, "uploading image to %v...", gcsImage)
-	if err := GCS.UploadFile(env.Image, gcsImage); err != nil {
-		return nil, fmt.Errorf("failed to upload image: %v", err)
+	if err := uploadImageToGCS(env.Image, gcsImage); err != nil {
+		return nil, err
 	}
-	Logf(0, "creating GCE image...")
+	gceImage := env.Name
+	Logf(0, "creating GCE image %v...", gceImage)
 	if err := GCE.DeleteImage(gceImage); err != nil {
 		return nil, fmt.Errorf("failed to delete GCE image: %v", err)
 	}
@@ -150,7 +149,7 @@ func (pool *Pool) Create(workdir string, index int) (vmimpl.Instance, error) {
 			pool.GCE.DeleteInstance(name, true)
 		}
 	}()
-	sshKey := pool.cfg.Sshkey
+	sshKey := pool.env.Sshkey
 	sshUser := "root"
 	if sshKey == "" {
 		// Assuming image supports GCE ssh fanciness.
@@ -158,12 +157,13 @@ func (pool *Pool) Create(workdir string, index int) (vmimpl.Instance, error) {
 		sshUser = "syzkaller"
 	}
 	Logf(0, "wait instance to boot: %v (%v)", name, ip)
-	if err := waitInstanceBoot(ip, sshKey, sshUser); err != nil {
+	if err := waitInstanceBoot(pool.env.Debug, ip, sshKey, sshUser); err != nil {
 		return nil, err
 	}
 	ok = true
 	inst := &instance{
 		cfg:     pool.cfg,
+		debug:   pool.env.Debug,
 		GCE:     pool.GCE,
 		name:    name,
 		ip:      ip,
@@ -186,22 +186,8 @@ func (inst *instance) Forward(port int) (string, error) {
 
 func (inst *instance) Copy(hostSrc string) (string, error) {
 	vmDst := "./" + filepath.Base(hostSrc)
-	args := append(sshArgs(inst.sshKey, "-P", 22), hostSrc, inst.sshUser+"@"+inst.name+":"+vmDst)
-	cmd := exec.Command("scp", args...)
-	if err := cmd.Start(); err != nil {
-		return "", err
-	}
-	done := make(chan bool)
-	go func() {
-		select {
-		case <-time.After(time.Minute):
-			cmd.Process.Kill()
-		case <-done:
-		}
-	}()
-	err := cmd.Wait()
-	close(done)
-	if err != nil {
+	args := append(sshArgs(inst.debug, inst.sshKey, "-P", 22), hostSrc, inst.sshUser+"@"+inst.name+":"+vmDst)
+	if _, err := runCmd(inst.debug, "scp", args...); err != nil {
 		return "", err
 	}
 	return vmDst, nil
@@ -215,7 +201,7 @@ func (inst *instance) Run(timeout time.Duration, stop <-chan bool, command strin
 
 	conAddr := fmt.Sprintf("%v.%v.%v.syzkaller.port=1@ssh-serialport.googleapis.com",
 		inst.GCE.ProjectID, inst.GCE.ZoneID, inst.name)
-	conArgs := append(sshArgs(inst.gceKey, "-p", 9600), conAddr)
+	conArgs := append(sshArgs(inst.debug, inst.gceKey, "-p", 9600), conAddr)
 	con := exec.Command("ssh", conArgs...)
 	con.Env = []string{}
 	con.Stdout = conWpipe
@@ -242,7 +228,7 @@ func (inst *instance) Run(timeout time.Duration, stop <-chan bool, command strin
 	if inst.sshUser != "root" {
 		command = fmt.Sprintf("sudo bash -c '%v'", command)
 	}
-	args := append(sshArgs(inst.sshKey, "-p", 22), inst.sshUser+"@"+inst.name, command)
+	args := append(sshArgs(inst.debug, inst.sshKey, "-p", 22), inst.sshUser+"@"+inst.name, command)
 	ssh := exec.Command("ssh", args...)
 	ssh.Stdout = sshWpipe
 	ssh.Stderr = sshWpipe
@@ -255,7 +241,11 @@ func (inst *instance) Run(timeout time.Duration, stop <-chan bool, command strin
 	}
 	sshWpipe.Close()
 
-	merger := vmimpl.NewOutputMerger(nil)
+	var tee io.Writer
+	if inst.debug {
+		tee = os.Stdout
+	}
+	merger := vmimpl.NewOutputMerger(tee)
 	merger.Add("console", conRpipe)
 	merger.Add("ssh", sshRpipe)
 
@@ -304,21 +294,90 @@ func (inst *instance) Run(timeout time.Duration, stop <-chan bool, command strin
 	return merger.Output, errc, nil
 }
 
-func waitInstanceBoot(ip, sshKey, sshUser string) error {
+func waitInstanceBoot(debug bool, ip, sshKey, sshUser string) error {
 	for i := 0; i < 100; i++ {
 		if !vmimpl.SleepInterruptible(5 * time.Second) {
 			return fmt.Errorf("shutdown in progress")
 		}
-		cmd := exec.Command("ssh", append(sshArgs(sshKey, "-p", 22), sshUser+"@"+ip, "pwd")...)
-		if _, err := cmd.CombinedOutput(); err == nil {
+		args := append(sshArgs(debug, sshKey, "-p", 22), sshUser+"@"+ip, "pwd")
+		if _, err := runCmd(debug, "ssh", args...); err == nil {
 			return nil
 		}
 	}
 	return fmt.Errorf("can't ssh into the instance")
 }
 
-func sshArgs(sshKey, portArg string, port int) []string {
-	return []string{
+func uploadImageToGCS(localImage, gcsImage string) error {
+	GCS, err := gcs.NewClient()
+	if err != nil {
+		return fmt.Errorf("failed to create GCS client: %v", err)
+	}
+	defer GCS.Close()
+
+	localReader, err := os.Open(localImage)
+	if err != nil {
+		return fmt.Errorf("failed to open image file: %v")
+	}
+	defer localReader.Close()
+	localStat, err := localReader.Stat()
+	if err != nil {
+		return fmt.Errorf("failed to stat image file: %v")
+	}
+
+	gcsWriter, err := GCS.FileWriter(gcsImage)
+	if err != nil {
+		return fmt.Errorf("failed to upload image: %v", err)
+	}
+	defer gcsWriter.Close()
+
+	gzipWriter := gzip.NewWriter(gcsWriter)
+	tarWriter := tar.NewWriter(gzipWriter)
+	tarHeader := &tar.Header{
+		Name:     "disk.raw",
+		Typeflag: tar.TypeReg,
+		Mode:     0640,
+		Size:     localStat.Size(),
+		ModTime:  time.Now(),
+		// This is hacky but we actually need these large uids.
+		// GCE understands only the old GNU tar format and
+		// there is no direct way to force tar package to use GNU format.
+		// But these large numbers force tar to switch to GNU format.
+		Uid:   100000000,
+		Gid:   100000000,
+		Uname: "syzkaller",
+		Gname: "syzkaller",
+	}
+	if err := tarWriter.WriteHeader(tarHeader); err != nil {
+		return fmt.Errorf("failed to write image tar header: %v", err)
+	}
+	if _, err := io.Copy(tarWriter, localReader); err != nil {
+		return fmt.Errorf("failed to write image file: %v", err)
+	}
+	if err := tarWriter.Close(); err != nil {
+		return fmt.Errorf("failed to write image file: %v", err)
+	}
+	if err := gzipWriter.Close(); err != nil {
+		return fmt.Errorf("failed to write image file: %v", err)
+	}
+	if err := gcsWriter.Close(); err != nil {
+		return fmt.Errorf("failed to write image file: %v", err)
+	}
+	return nil
+}
+
+func runCmd(debug bool, bin string, args ...string) ([]byte, error) {
+	if debug {
+		Logf(0, "running command: %v %#v", bin, args)
+	}
+	output, err := osutil.RunCmd(time.Minute, "", bin, args...)
+	if debug {
+		Logf(0, "result: %v\n%s", err, output)
+	}
+	return output, err
+}
+
+func sshArgs(debug bool, sshKey, portArg string, port int) []string {
+	args := []string{
 		portArg, fmt.Sprint(port),
 		"-i", sshKey,
 		"-F", "/dev/null",
@@ -328,4 +387,8 @@ func sshArgs(sshKey, portArg string, port int) []string {
 		"-o", "StrictHostKeyChecking=no",
 		"-o", "ConnectTimeout=5",
 	}
+	if debug {
+		args = append(args, "-v")
+	}
+	return args
 }

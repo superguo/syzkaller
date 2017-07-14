@@ -8,17 +8,12 @@ const createImageScript = `#!/bin/bash
 set -eux
 
 if [ ! -e $1/sbin/init ]; then
-	echo "usage: create-gce-image.sh /dir/with/user/space/system /path/to/bzImage /path/to/vmlinux 'image tag'"
+	echo "usage: create-gce-image.sh /dir/with/user/space/system /path/to/bzImage"
 	exit 1
 fi
 
 if [ "$(basename $2)" != "bzImage" ]; then
-	echo "usage: create-gce-image.sh /dir/with/user/space/system /path/to/bzImage /path/to/vmlinux 'image tag'"
-	exit 1
-fi
-
-if [ "$(basename $3)" != "vmlinux" ]; then
-	echo "usage: create-gce-image.sh /dir/with/user/space/system /path/to/bzImage /path/to/vmlinux 'image tag'"
+	echo "usage: create-gce-image.sh /dir/with/user/space/system /path/to/bzImage"
 	exit 1
 fi
 
@@ -68,17 +63,11 @@ menuentry 'linux' --class gnu-linux --class gnu --class os {
 	insmod part_msdos
 	insmod ext2
 	set root='(hd0,1)'
-	linux /vmlinuz root=/dev/sda1 console=ttyS0 earlyprintk=serial vsyscall=native rodata=n ftrace_dump_on_oops=orig_cpu oops=panic panic_on_warn=1 panic=86400 kvm-intel.nested=1 kvm-intel.unrestricted_guest=1 kvm-intel.vmm_exclusive=1 kvm-intel.fasteoi=1 kvm-intel.ept=1 kvm-intel.flexpriority=1 kvm-intel.vpid=1 kvm-intel.emulate_invalid_guest_state=1 kvm-intel.eptad=1 kvm-intel.enable_shadow_vmcs=1 kvm-intel.pml=1 kvm-intel.enable_apicv=1
+	linux /vmlinuz root=/dev/sda1 console=ttyS0 earlyprintk=serial vsyscall=native rodata=n ftrace_dump_on_oops=orig_cpu oops=panic panic_on_warn=1 nmi_watchdog=panic panic=86400 kvm-intel.nested=1 kvm-intel.unrestricted_guest=1 kvm-intel.vmm_exclusive=1 kvm-intel.fasteoi=1 kvm-intel.ept=1 kvm-intel.flexpriority=1 kvm-intel.vpid=1 kvm-intel.emulate_invalid_guest_state=1 kvm-intel.eptad=1 kvm-intel.enable_shadow_vmcs=1 kvm-intel.pml=1 kvm-intel.enable_apicv=1
 }
 EOF
 sudo grub-install --boot-directory=disk.mnt/boot --no-floppy /dev/nbd0
 sudo umount disk.mnt
 rm -rf disk.mnt
 sudo qemu-nbd -d /dev/nbd0
-tar -Szcf disk.tar.gz disk.raw
-mkdir -p obj
-cp $3 obj/
-echo -n "$4" > tag
-tar -czvf image.tar.gz disk.tar.gz key tag obj/vmlinux
-rm -rf tag obj
 `
