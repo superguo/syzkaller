@@ -6,9 +6,6 @@
 //go:generate bash -c "echo -en 'const syzconfig = `\n' >> generated.go"
 //go:generate bash -c "cat kernel.config | grep -v '#' >> generated.go"
 //go:generate bash -c "echo -en '`\n\n' >> generated.go"
-//go:generate bash -c "echo -en 'const createImageScript = `#!/bin/bash\n' >> generated.go"
-//go:generate bash -c "cat ../tools/create-gce-image.sh | grep -v '#' >> generated.go"
-//go:generate bash -c "echo -en '`\n\n' >> generated.go"
 
 // syz-gce runs syz-manager on GCE in a continous loop handling image/syzkaller updates.
 // It downloads test image from GCS, downloads and builds syzkaller, then starts syz-manager
@@ -30,19 +27,19 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"runtime"
-	"strconv"
 	"sync/atomic"
 	"syscall"
 	"time"
 
-	"github.com/google/syzkaller/dashboard"
-	pkgconfig "github.com/google/syzkaller/pkg/config"
+	"github.com/google/syzkaller/pkg/config"
 	"github.com/google/syzkaller/pkg/gce"
 	"github.com/google/syzkaller/pkg/gcs"
 	"github.com/google/syzkaller/pkg/git"
+	"github.com/google/syzkaller/pkg/kernel"
 	. "github.com/google/syzkaller/pkg/log"
-	"github.com/google/syzkaller/syz-manager/config"
+	"github.com/google/syzkaller/pkg/osutil"
+	"github.com/google/syzkaller/syz-dash/dashboard"
+	"github.com/google/syzkaller/syz-manager/mgrconfig"
 )
 
 var (
@@ -90,7 +87,7 @@ func main() {
 	cfg = &Config{
 		Use_Dashboard_Patches: true,
 	}
-	if err := pkgconfig.LoadFile(*flagConfig, cfg); err != nil {
+	if err := config.LoadFile(*flagConfig, cfg); err != nil {
 		Fatalf("failed to load config file: %v", err)
 	}
 	EnableLogCaching(1000, 1<<20)
@@ -352,51 +349,45 @@ func (a *LocalBuildAction) Build() error {
 		return err
 	}
 	for _, p := range patches {
-		if err := a.apply(p); err != nil {
+		if err := applyPatch(dir, p); err != nil {
 			return err
 		}
 	}
 	Logf(0, "building kernel on %v...", hash)
-	if err := buildKernel(dir, a.Compiler); err != nil {
-		return fmt.Errorf("build failed: %v", err)
-	}
-	scriptFile := filepath.Join(a.Dir, "create-gce-image.sh")
-	if err := ioutil.WriteFile(scriptFile, []byte(createImageScript), 0700); err != nil {
-		return fmt.Errorf("failed to write script file: %v", err)
+	if cfg.Linux_Config != "" {
+		if err := kernel.Build(dir, a.Compiler, cfg.Linux_Config); err != nil {
+			return fmt.Errorf("build failed: %v", err)
+		}
+	} else {
+		if err := kernel.BuildWithPartConfig(dir, a.Compiler, syzconfig); err != nil {
+			return fmt.Errorf("build failed: %v", err)
+		}
 	}
 	Logf(0, "building image...")
-	vmlinux := filepath.Join(dir, "vmlinux")
-	bzImage := filepath.Join(dir, "arch/x86/boot/bzImage")
-	if _, err := runCmd(a.Dir, scriptFile, a.UserspaceDir, bzImage, vmlinux, hash); err != nil {
+	osutil.MkdirAll("image/obj")
+	if err := kernel.CreateImage(dir, a.UserspaceDir, "image/disk.raw", "image/key"); err != nil {
 		return fmt.Errorf("image build failed: %v", err)
 	}
-	os.Remove(filepath.Join(a.Dir, "disk.raw"))
-	os.Remove(filepath.Join(a.Dir, "image.tar.gz"))
-	os.MkdirAll("image/obj", 0700)
-	if err := ioutil.WriteFile("image/tag", []byte(hash), 0600); err != nil {
+	if err := osutil.WriteFile("image/tag", []byte(hash)); err != nil {
 		return fmt.Errorf("failed to write tag file: %v", err)
 	}
-	if err := os.Rename(filepath.Join(a.Dir, "key"), "image/key"); err != nil {
-		return fmt.Errorf("failed to rename key file: %v", err)
-	}
+	vmlinux := filepath.Join(dir, "vmlinux")
 	if err := os.Rename(vmlinux, "image/obj/vmlinux"); err != nil {
-		return fmt.Errorf("failed to rename vmlinux file: %v", err)
-	}
-	if err := os.Rename(filepath.Join(a.Dir, "disk.tar.gz"), "image/disk.tar.gz"); err != nil {
 		return fmt.Errorf("failed to rename vmlinux file: %v", err)
 	}
 	return nil
 }
 
-func (a *LocalBuildAction) apply(p dashboard.Patch) error {
+func applyPatch(kernelDir string, p dashboard.Patch) error {
 	// Do --dry-run first to not mess with partially consistent state.
 	cmd := exec.Command("patch", "-p1", "--force", "--ignore-whitespace", "--dry-run")
-	cmd.Dir = filepath.Join(a.Dir, "linux")
+	cmd.Dir = kernelDir
 	cmd.Stdin = bytes.NewReader(p.Diff)
 	if output, err := cmd.CombinedOutput(); err != nil {
-		// If it reverses clean, then it's already applied (seems to be the easiest way to detect it).
+		// If it reverses clean, then it's already applied
+		// (seems to be the easiest way to detect it).
 		cmd = exec.Command("patch", "-p1", "--force", "--ignore-whitespace", "--reverse", "--dry-run")
-		cmd.Dir = filepath.Join(a.Dir, "linux")
+		cmd.Dir = kernelDir
 		cmd.Stdin = bytes.NewReader(p.Diff)
 		if _, err := cmd.CombinedOutput(); err == nil {
 			Logf(0, "patch already present: %v", p.Title)
@@ -407,7 +398,7 @@ func (a *LocalBuildAction) apply(p dashboard.Patch) error {
 	}
 	// Now apply for real.
 	cmd = exec.Command("patch", "-p1", "--force", "--ignore-whitespace")
-	cmd.Dir = filepath.Join(a.Dir, "linux")
+	cmd.Dir = kernelDir
 	cmd.Stdin = bytes.NewReader(p.Diff)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("patch '%v' failed after dry run:\n%s", p.Title, output)
@@ -455,10 +446,10 @@ func writeManagerConfig(cfg *Config, httpPort int, file string) error {
 		tag = tag[:len(tag)-1]
 	}
 	sshKey := ""
-	if _, err := os.Stat("image/key"); err == nil {
+	if osutil.IsExist("image/key") {
 		sshKey = "image/key"
 	}
-	managerCfg := &config.Config{
+	managerCfg := &mgrconfig.Config{
 		Name:             cfg.Name,
 		Hub_Addr:         cfg.Hub_Addr,
 		Hub_Key:          cfg.Hub_Key,
@@ -471,22 +462,22 @@ func writeManagerConfig(cfg *Config, httpPort int, file string) error {
 		Tag:              string(tag),
 		Syzkaller:        "gopath/src/github.com/google/syzkaller",
 		Type:             "gce",
-		Image:            "image/disk.tar.gz",
-		Output:           "stdout",
+		Image:            "image/disk.raw",
+		Sshkey:           sshKey,
 		Sandbox:          cfg.Sandbox,
 		Procs:            cfg.Procs,
 		Enable_Syscalls:  cfg.Enable_Syscalls,
 		Disable_Syscalls: cfg.Disable_Syscalls,
 		Cover:            true,
 		Reproduce:        true,
-		VM: []byte(fmt.Sprintf(`{"count": %v, "machine_type": %q, "gcs_path": %q, "sshkey": %q}`,
-			cfg.Machine_Count, cfg.Machine_Type, cfg.GCS_Path, sshKey)),
+		VM: []byte(fmt.Sprintf(`{"count": %v, "machine_type": %q, "gcs_path": %q}`,
+			cfg.Machine_Count, cfg.Machine_Type, cfg.GCS_Path)),
 	}
 	data, err := json.MarshalIndent(managerCfg, "", "\t")
 	if err != nil {
 		return err
 	}
-	if err := ioutil.WriteFile(file, data, 0600); err != nil {
+	if err := osutil.WriteFile(file, data); err != nil {
 		return err
 	}
 	return nil
@@ -528,10 +519,10 @@ func downloadAndExtract(f *gcs.File, dir string) error {
 		}
 		files[filepath.Clean(hdr.Name)] = true
 		base, file := filepath.Split(hdr.Name)
-		if err := os.MkdirAll(filepath.Join(dir, base), 0700); err != nil {
+		if err := osutil.MkdirAll(filepath.Join(dir, base)); err != nil {
 			return err
 		}
-		dst, err := os.OpenFile(filepath.Join(dir, base, file), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
+		dst, err := os.OpenFile(filepath.Join(dir, base, file), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, osutil.DefaultFilePerm)
 		if err != nil {
 			return err
 		}
@@ -545,33 +536,6 @@ func downloadAndExtract(f *gcs.File, dir string) error {
 		if !files[need] {
 			return fmt.Errorf("archive misses required file '%v'", need)
 		}
-	}
-	return nil
-}
-
-func buildKernel(dir, ccompiler string) error {
-	os.Remove(filepath.Join(dir, ".config"))
-	if _, err := runCmd(dir, "make", "defconfig"); err != nil {
-		return err
-	}
-	if _, err := runCmd(dir, "make", "kvmconfig"); err != nil {
-		return err
-	}
-	configFile := cfg.Linux_Config
-	if configFile == "" {
-		configFile = filepath.Join(dir, "syz.config")
-		if err := ioutil.WriteFile(configFile, []byte(syzconfig), 0600); err != nil {
-			return fmt.Errorf("failed to write config file: %v", err)
-		}
-	}
-	if _, err := runCmd(dir, "scripts/kconfig/merge_config.sh", "-n", ".config", configFile); err != nil {
-		return err
-	}
-	if _, err := runCmd(dir, "make", "olddefconfig"); err != nil {
-		return err
-	}
-	if _, err := runCmd(dir, "make", "-j", strconv.Itoa(runtime.NumCPU()*2), "CC="+ccompiler); err != nil {
-		return err
 	}
 	return nil
 }

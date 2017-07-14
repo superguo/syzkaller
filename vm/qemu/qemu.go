@@ -6,7 +6,6 @@ package qemu
 import (
 	"fmt"
 	"io"
-	"io/ioutil"
 	"math/rand"
 	"net"
 	"os"
@@ -34,12 +33,11 @@ type Config struct {
 	Count     int    // number of VMs to use
 	Qemu      string // qemu binary name (qemu-system-x86_64 by default)
 	Qemu_Args string // additional command line arguments for qemu binary
-	Kernel    string // e.g. arch/x86/boot/bzImage
+	Kernel    string // kernel for injected boot (e.g. arch/x86/boot/bzImage)
 	Cmdline   string // kernel command line (can only be specified with kernel)
 	Initrd    string // linux initial ramdisk. (optional)
 	Cpu       int    // number of VM CPUs
 	Mem       int    // amount of VM memory in MBs
-	Sshkey    string // root ssh key for the image
 }
 
 type Pool struct {
@@ -67,7 +65,7 @@ func ctor(env *vmimpl.Env) (vmimpl.Pool, error) {
 		Qemu:  "qemu-system-x86_64",
 	}
 	if err := config.LoadData(env.Config, cfg); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to parse qemu vm config: %v", err)
 	}
 	if cfg.Count < 1 || cfg.Count > 1000 {
 		return nil, fmt.Errorf("invalid config param count: %v, want [1, 1000]", cfg.Count)
@@ -83,11 +81,11 @@ func ctor(env *vmimpl.Env) (vmimpl.Pool, error) {
 			return nil, fmt.Errorf("9p image requires kernel")
 		}
 	} else {
-		if _, err := os.Stat(env.Image); err != nil {
-			return nil, fmt.Errorf("image file '%v' does not exist: %v", env.Image, err)
+		if !osutil.IsExist(env.Image) {
+			return nil, fmt.Errorf("image file '%v' does not exist", env.Image)
 		}
-		if _, err := os.Stat(cfg.Sshkey); err != nil {
-			return nil, fmt.Errorf("ssh key '%v' does not exist: %v", cfg.Sshkey, err)
+		if !osutil.IsExist(env.Sshkey) {
+			return nil, fmt.Errorf("ssh key '%v' does not exist", env.Sshkey)
 		}
 	}
 	if cfg.Cpu <= 0 || cfg.Cpu > 1024 {
@@ -98,7 +96,6 @@ func ctor(env *vmimpl.Env) (vmimpl.Pool, error) {
 	}
 	cfg.Kernel = osutil.Abs(cfg.Kernel)
 	cfg.Initrd = osutil.Abs(cfg.Initrd)
-	cfg.Sshkey = osutil.Abs(cfg.Sshkey)
 	pool := &Pool{
 		cfg: cfg,
 		env: env,
@@ -111,7 +108,7 @@ func (pool *Pool) Count() int {
 }
 
 func (pool *Pool) Create(workdir string, index int) (vmimpl.Instance, error) {
-	sshkey := pool.cfg.Sshkey
+	sshkey := pool.env.Sshkey
 	if pool.env.Image == "9p" {
 		sshkey = filepath.Join(workdir, "key")
 		keygen := exec.Command("ssh-keygen", "-t", "rsa", "-b", "2048", "-N", "", "-C", "", "-f", sshkey)
@@ -119,7 +116,7 @@ func (pool *Pool) Create(workdir string, index int) (vmimpl.Instance, error) {
 			return nil, fmt.Errorf("failed to execute ssh-keygen: %v\n%s", err, out)
 		}
 		initFile := filepath.Join(workdir, "init.sh")
-		if err := ioutil.WriteFile(initFile, []byte(strings.Replace(initScript, "{{KEY}}", sshkey, -1)), 0777); err != nil {
+		if err := osutil.WriteExecFile(initFile, []byte(strings.Replace(initScript, "{{KEY}}", sshkey, -1))); err != nil {
 			return nil, fmt.Errorf("failed to create init file: %v", err)
 		}
 	}
@@ -230,21 +227,47 @@ func (inst *instance) Boot() error {
 		)
 	}
 	if inst.cfg.Kernel != "" {
-		cmdline := "console=ttyS0 vsyscall=native rodata=n oops=panic panic_on_warn=1 panic=86400" +
-			" ftrace_dump_on_oops=orig_cpu earlyprintk=serial slub_debug=UZ net.ifnames=0 biosdevname=0 " +
-			" kvm-intel.nested=1 kvm-intel.unrestricted_guest=1 kvm-intel.vmm_exclusive=1 kvm-intel.fasteoi=1 " +
-			" kvm-intel.ept=1 kvm-intel.flexpriority=1 " +
-			" kvm-intel.vpid=1 kvm-intel.emulate_invalid_guest_state=1 kvm-intel.eptad=1 " +
-			" kvm-intel.enable_shadow_vmcs=1 kvm-intel.pml=1 kvm-intel.enable_apicv=1 "
-		if inst.image == "9p" {
-			cmdline += "root=/dev/root rootfstype=9p rootflags=trans=virtio,version=9p2000.L,cache=loose "
-			cmdline += "init=" + filepath.Join(inst.workdir, "init.sh") + " "
-		} else {
-			cmdline += "root=/dev/sda "
+		cmdline := []string{
+			"console=ttyS0",
+			"vsyscall=native",
+			"rodata=n",
+			"oops=panic",
+			"nmi_watchdog=panic",
+			"panic_on_warn=1",
+			"panic=86400",
+			"ftrace_dump_on_oops=orig_cpu",
+			"earlyprintk=serial",
+			"net.ifnames=0",
+			"biosdevname=0",
+			"kvm-intel.nested=1",
+			"kvm-intel.unrestricted_guest=1",
+			"kvm-intel.vmm_exclusive=1",
+			"kvm-intel.fasteoi=1",
+			"kvm-intel.ept=1",
+			"kvm-intel.flexpriority=1",
+			"kvm-intel.vpid=1",
+			"kvm-intel.emulate_invalid_guest_state=1",
+			"kvm-intel.eptad=1",
+			"kvm-intel.enable_shadow_vmcs=1",
+			"kvm-intel.pml=1",
+			"kvm-intel.enable_apicv=1",
 		}
+		if inst.image == "9p" {
+			cmdline = append(cmdline,
+				"root=/dev/root",
+				"rootfstype=9p",
+				"rootflags=trans=virtio,version=9p2000.L,cache=loose",
+				"init="+filepath.Join(inst.workdir, "init.sh"),
+			)
+		} else {
+			cmdline = append(cmdline,
+				"root=/dev/sda",
+			)
+		}
+		cmdline = append(cmdline, inst.cfg.Cmdline)
 		args = append(args,
 			"-kernel", inst.cfg.Kernel,
-			"-append", cmdline+inst.cfg.Cmdline,
+			"-append", strings.Join(cmdline, " "),
 		)
 	}
 	if inst.debug {
