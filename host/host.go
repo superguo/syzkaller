@@ -64,6 +64,11 @@ func isSupportedSyzkall(c *sys.Call) bool {
 	case "syz_test":
 		return false
 	case "syz_open_dev":
+		if _, ok := c.Args[0].(*sys.ConstType); ok {
+			// This is for syz_open_dev$char/block.
+			// They are currently commented out, but in case one enables them.
+			return true
+		}
 		fname, ok := extractStringConst(c.Args[0])
 		if !ok {
 			panic("first open arg is not a pointer to string const")
@@ -93,8 +98,11 @@ func isSupportedSyzkall(c *sys.Call) bool {
 	case "syz_fuseblk_mount":
 		_, err := os.Stat("/dev/fuse")
 		return err == nil && syscall.Getuid() == 0
-	case "syz_emit_ethernet":
-		_, err := os.Stat("/dev/net/tun")
+	case "syz_emit_ethernet", "syz_extract_tcp_res":
+		fd, err := syscall.Open("/dev/net/tun", syscall.O_RDWR, 0)
+		if err == nil {
+			syscall.Close(fd)
+		}
 		return err == nil && syscall.Getuid() == 0
 	case "syz_kvm_setup_cpu":
 		switch c.Name {

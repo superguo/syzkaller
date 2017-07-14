@@ -19,23 +19,18 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/google/syzkaller/config"
 	"github.com/google/syzkaller/cover"
 	"github.com/google/syzkaller/csource"
-	"github.com/google/syzkaller/db"
-	"github.com/google/syzkaller/hash"
-	. "github.com/google/syzkaller/log"
+	"github.com/google/syzkaller/dashboard"
+	"github.com/google/syzkaller/pkg/db"
+	"github.com/google/syzkaller/pkg/hash"
+	. "github.com/google/syzkaller/pkg/log"
 	"github.com/google/syzkaller/prog"
 	"github.com/google/syzkaller/report"
 	"github.com/google/syzkaller/repro"
 	. "github.com/google/syzkaller/rpctype"
+	"github.com/google/syzkaller/syz-manager/config"
 	"github.com/google/syzkaller/vm"
-	_ "github.com/google/syzkaller/vm/adb"
-	_ "github.com/google/syzkaller/vm/adbemu"
-	_ "github.com/google/syzkaller/vm/gce"
-	_ "github.com/google/syzkaller/vm/kvm"
-	_ "github.com/google/syzkaller/vm/local"
-	_ "github.com/google/syzkaller/vm/qemu"
 )
 
 var (
@@ -46,6 +41,7 @@ var (
 
 type Manager struct {
 	cfg          *config.Config
+	vmPool       *vm.Pool
 	crashdir     string
 	port         int
 	corpusDB     *db.DB
@@ -59,6 +55,8 @@ type Manager struct {
 	vmChecked    bool
 	fresh        bool
 	numFuzzing   uint32
+
+	dash *dashboard.Dashboard
 
 	mu              sync.Mutex
 	enabledSyscalls string
@@ -84,10 +82,10 @@ type Fuzzer struct {
 }
 
 type Crash struct {
-	vmName string
-	desc   string
-	text   []byte
-	output []byte
+	vmIndex int
+	desc    string
+	text    []byte
+	output  []byte
 }
 
 func main() {
@@ -97,15 +95,23 @@ func main() {
 	if err != nil {
 		Fatalf("%v", err)
 	}
-	if *flagDebug {
-		cfg.Debug = true
-		cfg.Count = 1
-	}
 	initAllCover(cfg.Vmlinux)
 	RunManager(cfg, syscalls)
 }
 
 func RunManager(cfg *config.Config, syscalls map[int]bool) {
+	env := &vm.Env{
+		Name:    cfg.Name,
+		Workdir: cfg.Workdir,
+		Image:   cfg.Image,
+		Debug:   *flagDebug,
+		Config:  cfg.VM,
+	}
+	vmPool, err := vm.Create(cfg.Type, env)
+	if err != nil {
+		Fatalf("%v", err)
+	}
+
 	crashdir := filepath.Join(cfg.Workdir, "crashes")
 	os.MkdirAll(crashdir, 0700)
 
@@ -121,6 +127,7 @@ func RunManager(cfg *config.Config, syscalls map[int]bool) {
 
 	mgr := &Manager{
 		cfg:             cfg,
+		vmPool:          vmPool,
 		crashdir:        crashdir,
 		startTime:       time.Now(),
 		stats:           make(map[string]uint64),
@@ -143,7 +150,6 @@ func RunManager(cfg *config.Config, syscalls map[int]bool) {
 			Fatalf("failed to convert old corpus: %v", err)
 		}
 	}
-	var err error
 	mgr.corpusDB, err = db.Open(dbFilename)
 	if err != nil {
 		Fatalf("failed to open corpus database: %v", err)
@@ -208,6 +214,14 @@ func RunManager(cfg *config.Config, syscalls map[int]bool) {
 	mgr.port = s.Addr().(*net.TCPAddr).Port
 	go s.Serve()
 
+	if cfg.Dashboard_Addr != "" {
+		mgr.dash = &dashboard.Dashboard{
+			Addr:   cfg.Dashboard_Addr,
+			Client: cfg.Name,
+			Key:    cfg.Dashboard_Key,
+		}
+	}
+
 	go func() {
 		for lastTime := time.Now(); ; {
 			time.Sleep(10 * time.Second)
@@ -215,6 +229,10 @@ func RunManager(cfg *config.Config, syscalls map[int]bool) {
 			diff := now.Sub(lastTime)
 			lastTime = now
 			mgr.mu.Lock()
+			if mgr.firstConnect.IsZero() {
+				mgr.mu.Unlock()
+				continue
+			}
 			mgr.fuzzingTime += diff * time.Duration(atomic.LoadUint32(&mgr.numFuzzing))
 			executed := mgr.stats["exec total"]
 			crashes := mgr.stats["crashes"]
@@ -296,13 +314,15 @@ type ReproResult struct {
 
 func (mgr *Manager) vmLoop() {
 	Logf(0, "booting test machines...")
+	Logf(0, "wait for the connection from test machine...")
 	reproInstances := 4
-	if reproInstances > mgr.cfg.Count {
-		reproInstances = mgr.cfg.Count
+	vmCount := mgr.vmPool.Count()
+	if reproInstances > vmCount {
+		reproInstances = vmCount
 	}
-	instances := make([]int, mgr.cfg.Count)
+	instances := make([]int, vmCount)
 	for i := range instances {
-		instances[i] = mgr.cfg.Count - i - 1
+		instances[i] = vmCount - i - 1
 	}
 	runDone := make(chan *RunResult, 1)
 	pendingRepro := make(map[*Crash]bool)
@@ -326,10 +346,10 @@ func (mgr *Manager) vmLoop() {
 		}
 
 		Logf(1, "loop: shutdown=%v instances=%v/%v %+v repro: pending=%v reproducing=%v queued=%v",
-			shutdown == nil, len(instances), mgr.cfg.Count, instances,
+			shutdown == nil, len(instances), vmCount, instances,
 			len(pendingRepro), len(reproducing), len(reproQueue))
 		if shutdown == nil {
-			if len(instances) == mgr.cfg.Count {
+			if len(instances) == vmCount {
 				return
 			}
 		} else {
@@ -342,7 +362,7 @@ func (mgr *Manager) vmLoop() {
 				instances = instances[:len(instances)-reproInstances]
 				Logf(1, "loop: starting repro of '%v' on instances %+v", crash.desc, vmIndexes)
 				go func() {
-					res, err := repro.Run(crash.output, mgr.cfg, vmIndexes)
+					res, err := repro.Run(crash.output, mgr.cfg, mgr.vmPool, vmIndexes)
 					reproDone <- &ReproResult{vmIndexes, crash, res, err}
 				}()
 			}
@@ -352,11 +372,7 @@ func (mgr *Manager) vmLoop() {
 				instances = instances[:last]
 				Logf(1, "loop: starting instance %v", idx)
 				go func() {
-					vmCfg, err := config.CreateVMConfig(mgr.cfg, idx)
-					if err != nil {
-						Fatalf("failed to create VM config: %v", err)
-					}
-					crash, err := mgr.runInstance(vmCfg, idx == 0)
+					crash, err := mgr.runInstance(idx)
 					runDone <- &RunResult{idx, crash, err}
 				}()
 			}
@@ -407,8 +423,8 @@ func (mgr *Manager) vmLoop() {
 	}
 }
 
-func (mgr *Manager) runInstance(vmCfg *vm.Config, first bool) (*Crash, error) {
-	inst, err := vm.Create(mgr.cfg.Type, vmCfg)
+func (mgr *Manager) runInstance(index int) (*Crash, error) {
+	inst, err := mgr.vmPool.Create(index)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create instance: %v", err)
 	}
@@ -428,7 +444,7 @@ func (mgr *Manager) runInstance(vmCfg *vm.Config, first bool) (*Crash, error) {
 	}
 
 	// Leak detection significantly slows down fuzzing, so detect leaks only on the first instance.
-	leak := first && mgr.cfg.Leak
+	leak := mgr.cfg.Leak && index == 0
 	fuzzerV := 0
 	procs := mgr.cfg.Procs
 	if *flagDebug {
@@ -440,24 +456,24 @@ func (mgr *Manager) runInstance(vmCfg *vm.Config, first bool) (*Crash, error) {
 	start := time.Now()
 	atomic.AddUint32(&mgr.numFuzzing, 1)
 	defer atomic.AddUint32(&mgr.numFuzzing, ^uint32(0))
-	cmd := fmt.Sprintf("%v -executor=%v -name=%v -manager=%v -output=%v -procs=%v -leak=%v -cover=%v -sandbox=%v -debug=%v -v=%d",
-		fuzzerBin, executorBin, vmCfg.Name, fwdAddr, mgr.cfg.Output, procs, leak, mgr.cfg.Cover, mgr.cfg.Sandbox, *flagDebug, fuzzerV)
+	cmd := fmt.Sprintf("%v -executor=%v -name=vm-%v -manager=%v -output=%v -procs=%v -leak=%v -cover=%v -sandbox=%v -debug=%v -v=%d",
+		fuzzerBin, executorBin, index, fwdAddr, mgr.cfg.Output, procs, leak, mgr.cfg.Cover, mgr.cfg.Sandbox, *flagDebug, fuzzerV)
 	outc, errc, err := inst.Run(time.Hour, mgr.vmStop, cmd)
 	if err != nil {
 		return nil, fmt.Errorf("failed to run fuzzer: %v", err)
 	}
 
-	desc, text, output, crashed, timedout := vm.MonitorExecution(outc, errc, mgr.cfg.Type == "local", true, mgr.cfg.ParsedIgnores)
+	desc, text, output, crashed, timedout := vm.MonitorExecution(outc, errc, true, mgr.cfg.ParsedIgnores)
 	if timedout {
 		// This is the only "OK" outcome.
-		Logf(0, "%v: running for %v, restarting (%v)", vmCfg.Name, time.Since(start), desc)
+		Logf(0, "vm-%v: running for %v, restarting (%v)", index, time.Since(start), desc)
 		return nil, nil
 	}
 	if !crashed {
 		// syz-fuzzer exited, but it should not.
 		desc = "lost connection to test machine"
 	}
-	return &Crash{vmCfg.Name, desc, text, output}, nil
+	return &Crash{index, desc, text, output}, nil
 }
 
 func (mgr *Manager) isSuppressed(crash *Crash) bool {
@@ -465,7 +481,7 @@ func (mgr *Manager) isSuppressed(crash *Crash) bool {
 		if !re.Match(crash.output) {
 			continue
 		}
-		Logf(1, "%v: suppressing '%v' with '%v'", crash.vmName, crash.desc, re.String())
+		Logf(1, "vm-%v: suppressing '%v' with '%v'", crash.vmIndex, crash.desc, re.String())
 		mgr.mu.Lock()
 		mgr.stats["suppressed"]++
 		mgr.mu.Unlock()
@@ -475,7 +491,7 @@ func (mgr *Manager) isSuppressed(crash *Crash) bool {
 }
 
 func (mgr *Manager) saveCrash(crash *Crash) {
-	Logf(0, "%v: crash: %v", crash.vmName, crash.desc)
+	Logf(0, "vm-%v: crash: %v", crash.vmIndex, crash.desc)
 	mgr.mu.Lock()
 	mgr.stats["crashes"]++
 	if !mgr.crashTypes[crash.desc] {
@@ -512,13 +528,26 @@ func (mgr *Manager) saveCrash(crash *Crash) {
 		ioutil.WriteFile(filepath.Join(dir, fmt.Sprintf("tag%v", oldestI)), []byte(mgr.cfg.Tag), 0660)
 	}
 	if len(crash.text) > 0 {
-		symbolized, err := report.Symbolize(mgr.cfg.Vmlinux, crash.text)
+		<-allSymbolsReady
+		symbolized, err := report.Symbolize(mgr.cfg.Vmlinux, crash.text, allSymbols)
 		if err != nil {
 			Logf(0, "failed to symbolize crash: %v", err)
 		} else {
 			crash.text = symbolized
 		}
-		ioutil.WriteFile(filepath.Join(dir, fmt.Sprintf("report%v", oldestI)), []byte(crash.text), 0660)
+		ioutil.WriteFile(filepath.Join(dir, fmt.Sprintf("report%v", oldestI)), crash.text, 0660)
+	}
+
+	if mgr.dash != nil {
+		dc := &dashboard.Crash{
+			Tag:    mgr.cfg.Tag,
+			Desc:   crash.desc,
+			Log:    crash.output,
+			Report: crash.text,
+		}
+		if err := mgr.dash.ReportCrash(dc); err != nil {
+			Logf(0, "failed to report crash to dashboard: %v", err)
+		}
 	}
 }
 
@@ -545,6 +574,18 @@ func (mgr *Manager) saveRepro(crash *Crash, res *repro.Result) {
 	sig := hash.Hash([]byte(crash.desc))
 	dir := filepath.Join(mgr.crashdir, sig.String())
 	if res == nil {
+		if mgr.dash != nil {
+			dr := &dashboard.Repro{
+				Crash: dashboard.Crash{
+					Tag:  mgr.cfg.Tag,
+					Desc: crash.desc,
+				},
+				Reproduced: false,
+			}
+			if err := mgr.dash.ReportRepro(dr); err != nil {
+				Logf(0, "failed to report repro to dashboard: %v", err)
+			}
+		}
 		for i := 0; i < maxReproAttempts; i++ {
 			name := filepath.Join(dir, fmt.Sprintf("repro%v", i))
 			if _, err := os.Stat(name); err != nil {
@@ -563,6 +604,7 @@ func (mgr *Manager) saveRepro(crash *Crash, res *repro.Result) {
 	if len(crash.text) > 0 {
 		ioutil.WriteFile(filepath.Join(dir, "repro.report"), []byte(crash.text), 0660)
 	}
+	var cprogText []byte
 	if res.CRepro {
 		cprog, err := csource.Write(res.Prog, res.Opts)
 		if err == nil {
@@ -571,8 +613,26 @@ func (mgr *Manager) saveRepro(crash *Crash, res *repro.Result) {
 				cprog = formatted
 			}
 			ioutil.WriteFile(filepath.Join(dir, "repro.cprog"), cprog, 0660)
+			cprogText = cprog
 		} else {
 			Logf(0, "failed to write C source: %v", err)
+		}
+	}
+
+	if mgr.dash != nil {
+		dr := &dashboard.Repro{
+			Crash: dashboard.Crash{
+				Tag:    mgr.cfg.Tag,
+				Desc:   crash.desc,
+				Report: crash.text,
+			},
+			Reproduced: true,
+			Opts:       fmt.Sprintf("%+v", res.Opts),
+			Prog:       res.Prog.Serialize(),
+			CProg:      cprogText,
+		}
+		if err := mgr.dash.ReportRepro(dr); err != nil {
+			Logf(0, "failed to report repro to dashboard: %v", err)
 		}
 	}
 }
@@ -614,6 +674,7 @@ func (mgr *Manager) Connect(a *ConnectArgs, r *ConnectRes) error {
 
 	if mgr.firstConnect.IsZero() {
 		mgr.firstConnect = time.Now()
+		Logf(0, "received first connection from test machine %v", a.Name)
 	}
 
 	mgr.stats["vm restarts"]++
@@ -676,12 +737,16 @@ func (mgr *Manager) Check(a *CheckArgs, r *int) error {
 	if mgr.vmChecked {
 		return nil
 	}
-	Logf(1, "fuzzer %v vm check: %v calls enabled", a.Name, len(a.Calls))
+	Logf(1, "fuzzer %v vm check: %v calls enabled, kcov=%v, kleakcheck=%v, faultinjection=%v",
+		a.Name, len(a.Calls), a.Kcov, a.Leak, a.Fault)
 	if len(a.Calls) == 0 {
 		Fatalf("no system calls enabled")
 	}
 	if mgr.cfg.Cover && !a.Kcov {
 		Fatalf("/sys/kernel/debug/kcov is missing. Enable CONFIG_KCOV and mount debugfs")
+	}
+	if mgr.cfg.Sandbox == "namespace" && !a.UserNamespaces {
+		Fatalf("/proc/self/ns/user is missing or permission is denied. Requested namespace sandbox but user namespaces are not enabled. Enable CONFIG_USER_NS")
 	}
 	mgr.vmChecked = true
 	mgr.enabledCalls = a.Calls
@@ -841,31 +906,38 @@ func (mgr *Manager) hubSync() {
 		delete(mgr.hubCorpus, sig)
 		a.Del = append(a.Del, sig.String())
 	}
-	mgr.mu.Unlock()
-	r := new(HubSyncRes)
-	if err := mgr.hub.Call("Hub.Sync", a, r); err != nil {
-		mgr.mu.Lock()
-		Logf(0, "Hub.Sync rpc failed: %v", err)
-		mgr.hub.Close()
-		mgr.hub = nil
-		return
-	}
-	mgr.mu.Lock()
-	dropped := 0
-	for _, inp := range r.Inputs {
-		_, err := prog.Deserialize(inp)
-		if err != nil {
-			dropped++
-			continue
+	for {
+		mgr.mu.Unlock()
+		r := new(HubSyncRes)
+		if err := mgr.hub.Call("Hub.Sync", a, r); err != nil {
+			mgr.mu.Lock()
+			Logf(0, "Hub.Sync rpc failed: %v", err)
+			mgr.hub.Close()
+			mgr.hub = nil
+			return
 		}
-		mgr.candidates = append(mgr.candidates, RpcCandidate{
-			Prog:      inp,
-			Minimized: false, // don't trust programs from hub
-		})
+		mgr.mu.Lock()
+		dropped := 0
+		for _, inp := range r.Inputs {
+			_, err := prog.Deserialize(inp)
+			if err != nil {
+				dropped++
+				continue
+			}
+			mgr.candidates = append(mgr.candidates, RpcCandidate{
+				Prog:      inp,
+				Minimized: false, // don't trust programs from hub
+			})
+		}
+		mgr.stats["hub add"] += uint64(len(a.Add))
+		mgr.stats["hub del"] += uint64(len(a.Del))
+		mgr.stats["hub drop"] += uint64(dropped)
+		mgr.stats["hub new"] += uint64(len(r.Inputs) - dropped)
+		Logf(0, "hub sync: add %v, del %v, drop %v, new %v, more %v", len(a.Add), len(a.Del), dropped, len(r.Inputs)-dropped, r.More)
+		if len(r.Inputs)+r.More == 0 {
+			break
+		}
+		a.Add = nil
+		a.Del = nil
 	}
-	mgr.stats["hub add"] += uint64(len(a.Add))
-	mgr.stats["hub del"] += uint64(len(a.Del))
-	mgr.stats["hub drop"] += uint64(dropped)
-	mgr.stats["hub new"] += uint64(len(r.Inputs) - dropped)
-	Logf(0, "hub sync: add %v, del %v, drop %v, new %v", len(a.Add), len(a.Del), dropped, len(r.Inputs)-dropped)
 }

@@ -16,8 +16,10 @@ import (
 	"time"
 	"bufio"
 
-	. "github.com/google/syzkaller/log"
-	"github.com/google/syzkaller/vm"
+	"github.com/google/syzkaller/pkg/config"
+	. "github.com/google/syzkaller/pkg/log"
+	"github.com/google/syzkaller/pkg/osutil"
+	"github.com/google/syzkaller/vm/vmimpl"
 )
 
 const (
@@ -25,53 +27,113 @@ const (
 )
 
 func init() {
-	vm.Register("adbemu", ctor)
+	vmimpl.Register("adbemu", ctor)
+}
+
+type Config struct {
+	Count     int      // number of VMs to use
+	SdkPath   string   // Optional path to the Android SDK or obtained from environment variable ANDROID_SDK
+	AdbBin	  string   // Optional adb path. Must be set if sdk path could not be determined
+	Emu       string   // Optional emulator binary path. Must be set if sdk path could not be determined
+	Avd       string   // Android virtual device name for emulator -avd argument (without "@")
+	Kernel    string   // Path to kernel image e.g. arch/x86/boot/bzImage
+	Avd_Args  string   // Additional Android emulator arguments (before -qemu after -avd $Avd)
+	Qemu_Args string   // Additional Android emulator arguments (after -qemu)
+}
+
+type Pool struct {
+	env *vmimpl.Env
+	cfg *Config
 }
 
 type instance struct {
-	cfg     *vm.Config
+	cfg     *Config
 	port    int
+	workdir string
 	rpipe   io.ReadCloser
 	wpipe   io.WriteCloser
 	qemu    *exec.Cmd
 	waiterC chan error
-	merger  *vm.OutputMerger
+	merger  *vmimpl.OutputMerger
+	debug   bool
 
 	// Android stuffs
 	device  string
-	sdkPath string
 }
 
-func ctor(cfg *vm.Config) (vm.Instance, error) {
-	for i := 0; ; i++ {
-		inst, err := ctorImpl(cfg)
-		if err == nil {
-			return inst, nil
-		}
-		if i < 1000 && strings.Contains(err.Error(), "could not set up host forwarding rule") {
-			continue
-		}
-		os.RemoveAll(cfg.Workdir)
+func ctor(env *vmimpl.Env) (vmimpl.Pool, error) {
+	cfg := &Config{
+		Count:     1,
+		SdkPath:   "",
+		AdbBin:    "",
+		Emu:       "",
+		Avd:       "",
+		Kernel:    "",
+		Avd_Args:  "-verbose -wipe-data -show-kernel -no-window",
+		Qemu_Args: "-enable-kvm",
+	}
+
+	if err := config.LoadData(env.Config, cfg); err != nil {
 		return nil, err
 	}
+	if cfg.Count < 1 || cfg.Count > 1000 {
+		return nil, fmt.Errorf("invalid config param count: %v, want [1, 1000]", cfg.Count)
+	}
+	if env.Debug {
+		cfg.Count = 1
+	}
+
+	if env.Image == "9p" {
+		return nil, fmt.Errorf("9p image is not unsupported")
+	}
+	if cfg.Kernel != "" {
+		if _, err := os.Stat(cfg.Kernel); err != nil {
+			return nil, fmt.Errorf("kernel image file '%v' does not exist: %v", cfg.Kernel, err)
+		}
+	}
+	if cfg.SdkPath == "" {
+		cfg.SdkPath = os.Getenv("ANDROID_SDK")
+	}
+	if cfg.SdkPath == "" {
+		return nil, fmt.Errorf("ANDROID_SDK must be set")
+	}
+	if cfg.AdbBin == "" {
+		cfg.AdbBin = cfg.SdkPath + "/platform-tools/adb"
+	}
+	if cfg.Emu == "" {
+		cfg.Emu = cfg.SdkPath + "/tools/emulator"
+	}
+	if !containsAvd(cfg.Emu, cfg.Avd) {
+		return nil, fmt.Errorf("avd '%v' doest not exist", cfg.Avd)
+	}
+	pool := &Pool{
+		cfg: cfg,
+		env: env,
+	}
+	return pool, nil
 }
 
-func ctorImpl(cfg *vm.Config) (vm.Instance, error) {
-	inst := &instance{cfg: cfg}
+func (pool *Pool) Count() int {
+	return pool.cfg.Count
+}
+
+func (pool *Pool) Create(workdir string, index int) (vmimpl.Instance, error) {
+	inst := &instance{
+		cfg:     pool.cfg,
+//		closed:  make(chan bool),
+		workdir: workdir,
+		debug:   pool.env.Debug,
+	}
+
 	closeInst := inst
 	defer func() {
 		if closeInst != nil {
-			closeInst.close(false)
+			closeInst.Close()
 		}
 	}()
 
-	inst.sdkPath = os.Getenv("ANDROID_SDK")
-	if err := validateConfig(cfg, inst.sdkPath); err != nil {
-		return nil, err
-	}
-
 	var err error
-	inst.rpipe, inst.wpipe, err = vm.LongPipe()
+	inst.rpipe, inst.wpipe, err = osutil.LongPipe()
 	if err != nil {
 		return nil, err
 	}
@@ -83,7 +145,6 @@ func ctorImpl(cfg *vm.Config) (vm.Instance, error) {
 	closeInst = nil
 	return inst, nil
 }
-
 
 func containsAvd(emulatorPath string, avd string) bool {
 	cmd := exec.Command(emulatorPath, "-list-avds")
@@ -108,27 +169,6 @@ func containsAvd(emulatorPath string, avd string) bool {
 	return false
 }
 
-func validateConfig(cfg *vm.Config, sdkPath string) error {
-	if cfg.Bin == "" {
-		if sdkPath == "" {
-			return fmt.Errorf("ANDROID_SDK must be set")
-		}
-		cfg.Bin = sdkPath + "/tools/emulator"
-	}
-	if cfg.Image == "9p" {
-		return fmt.Errorf("9p image is not unsupported")
-	}
-	if cfg.Kernel != "" {
-		if _, err := os.Stat(cfg.Kernel); err != nil {
-			return fmt.Errorf("kernel image file '%v' does not exist: %v", cfg.Image, err)
-		}
-	}
-	if !containsAvd(cfg.Bin, cfg.Avd) {
-		return fmt.Errorf("avd '%v' doest not exist", cfg.Avd)
-	}
-	return nil
-}
-
 
 func (inst *instance) Close() {
 	inst.close(true)
@@ -149,9 +189,9 @@ func (inst *instance) close(removeWorkDir bool) {
 	if inst.wpipe != nil {
 		inst.wpipe.Close()
 	}
-	os.Remove(filepath.Join(inst.cfg.Workdir, "key"))
+	os.Remove(filepath.Join(inst.workdir, "key"))
 	if removeWorkDir {
-		os.RemoveAll(inst.cfg.Workdir)
+		os.RemoveAll(inst.workdir)
 	}
 }
 
@@ -171,44 +211,23 @@ func (inst *instance) Boot() error {
 		args = append(args, "-kernel", inst.cfg.Kernel)
 	}
 
-	// arguments before -qemu
-	if inst.cfg.AvdArgs == "" {
-		// This is reasonable defaults for Android emulator.
-		args = append(args,
-			"-verbose",
-			"-wipe-data",
-			"-show-kernel",
-			"-no-window",
-		)
-	} else {
-		args = append(args, strings.Split(inst.cfg.AvdArgs, " ")...)
-	}
+	// Avd_Args are the arguments before -qemu
+	// For default value,  see func ctor(env *vmimpl.Env) (vmimpl.Pool, error) 
+	args = append(args, strings.Split(inst.cfg.Avd_Args, " ")...)
 
-	// Bin_Args is following '-qemu' so as not to change its meaning.
-	// To change the arguments before -qemu, use Avd_Args
+	// Qemu_Args are arguments after '-qemu'
+	// For default value,  see func ctor(env *vmimpl.Env) (vmimpl.Pool, error) 
 	args = append(args, "-qemu")
-	if inst.cfg.BinArgs == "" {
-		// This is reasonable defaults for kvm-enabled host.
-		args = append(args, "-enable-kvm")
-	} else {
-		args = append(args, strings.Split(inst.cfg.BinArgs, " ")...)
-	}
+	args = append(args, strings.Split(inst.cfg.Qemu_Args, " ")...)
 
-	// This argument must be added after -qemu
-	if inst.cfg.Initrd != "" {
-		args = append(args,
-			"-initrd", inst.cfg.Initrd,
-		)
+	if inst.debug {
+		Logf(0, "running command: %v %#v", inst.cfg.Emu, args)
 	}
-
-	if inst.cfg.Debug {
-		Logf(0, "running command: %v %#v", inst.cfg.Bin, args)
-	}
-	qemu := exec.Command(inst.cfg.Bin, args...)
+	qemu := exec.Command(inst.cfg.Emu, args...)
 	qemu.Stdout = inst.wpipe
 	qemu.Stderr = inst.wpipe
 	if err := qemu.Start(); err != nil {
-		return fmt.Errorf("failed to start %v %+v: %v", inst.cfg.Bin, args, err)
+		return fmt.Errorf("failed to start %v %+v: %v", inst.cfg.Emu, args, err)
 	}
 	inst.wpipe.Close()
 	inst.wpipe = nil
@@ -217,10 +236,10 @@ func (inst *instance) Boot() error {
 
 	// Start output merger.
 	var tee io.Writer
-	if inst.cfg.Debug {
+	if inst.debug {
 		tee = os.Stdout
 	}
-	inst.merger = vm.NewOutputMerger(tee)
+	inst.merger = vmimpl.NewOutputMerger(tee)
 	inst.merger.Add("qemu", inst.rpipe)
 	inst.rpipe = nil
 
@@ -246,7 +265,7 @@ func (inst *instance) Boot() error {
 	}()
 
 	// Wait for device serial number to appear.
-	if inst.cfg.Debug {
+	if inst.debug {
 		Logf(0, "Looking for Android device sn")
 	}
 	time.Sleep(10 * time.Second)
@@ -298,7 +317,7 @@ func (inst *instance) Forward(port int) (string, error) {
 
 func (inst *instance) adb(args ...string) ([]byte, error) {
     args = append([]string{"-s", inst.device}, args...)
-    if inst.cfg.Debug {
+    if inst.debug {
         Logf(0, "running command: adb %+v", args)
     }
     rpipe, wpipe, err := os.Pipe()
@@ -307,8 +326,7 @@ func (inst *instance) adb(args ...string) ([]byte, error) {
     }
     defer wpipe.Close()
     defer rpipe.Close()
-    adbPath := inst.sdkPath + "/platform-tools/adb"
-    cmd := exec.Command(adbPath, args...)
+    cmd := exec.Command(inst.cfg.AdbBin, args...)
     cmd.Stdout = wpipe
     cmd.Stderr = wpipe
     if err := cmd.Start(); err != nil {
@@ -327,13 +345,13 @@ func (inst *instance) adb(args ...string) ([]byte, error) {
     if err := cmd.Wait(); err != nil {
         close(done)
         out, _ := ioutil.ReadAll(rpipe)
-        if inst.cfg.Debug {
+        if inst.debug {
             Logf(0, "adb failed: %v\n%s", err, out)
         }
         return nil, fmt.Errorf("adb %+v failed: %v\n%s", args, err, out)
     }
     close(done)
-    if inst.cfg.Debug {
+    if inst.debug {
         Logf(0, "adb returned")
     }
     out, _ := ioutil.ReadAll(rpipe)
@@ -352,7 +370,7 @@ func (inst *instance) Copy(hostSrc string) (string, error) {
 /* Run command via adb shell */
 func (inst *instance) Run(timeout time.Duration, stop <-chan bool, command string) (<-chan []byte, <-chan error, error) {
 
-	adbRpipe, adbWpipe, err := vm.LongPipe()
+	adbRpipe, adbWpipe, err := osutil.LongPipe()
 	if err != nil {
 		inst.qemu.Process.Kill()
 		// Do not close the inst.rpipe 'cause it will be closed in merger
@@ -361,7 +379,7 @@ func (inst *instance) Run(timeout time.Duration, stop <-chan bool, command strin
 		return nil, nil, err
 	}
 	
-	if inst.cfg.Debug {
+	if inst.debug {
 		Logf(0, "running command: adb -s %v shell %v", inst.device, command)
 	}
 
@@ -380,7 +398,7 @@ func (inst *instance) Run(timeout time.Duration, stop <-chan bool, command strin
 	adbDone := make(chan error, 1)
 	go func() {
         	err := adb.Wait()
-	        if inst.cfg.Debug {
+	        if inst.debug {
         	    Logf(0, "adb exited: %v", err)
 	        }
 	        adbDone <- fmt.Errorf("adb exited: %v", err)
@@ -399,11 +417,11 @@ func (inst *instance) Run(timeout time.Duration, stop <-chan bool, command strin
 	go func() {
 		select {
 		case <-time.After(timeout):
-			signal(vm.TimeoutErr)
+			signal(vmimpl.TimeoutErr)
 			inst.qemu.Process.Kill()
 			adb.Process.Kill()
 		case <-stop:
-			signal(vm.TimeoutErr)
+			signal(vmimpl.TimeoutErr)
 			inst.qemu.Process.Kill()
 			adb.Process.Kill()
 		case err := <-adbDone:

@@ -10,9 +10,12 @@ import (
 	"fmt"
 	"go/format"
 	"io"
+	"io/ioutil"
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
+	"runtime/pprof"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,7 +24,10 @@ import (
 )
 
 var (
-	flagV = flag.Int("v", 0, "verbosity")
+	flagV          = flag.Int("v", 0, "verbosity")
+	flagMemProfile = flag.String("memprofile", "", "write a memory profile to the file")
+
+	intRegExp = regexp.MustCompile("^int([0-9]+|ptr)(be)?(:[0-9]+)?$")
 )
 
 const (
@@ -86,6 +92,18 @@ func main() {
 	}
 
 	generateExecutorSyscalls(desc.Syscalls, consts)
+
+	if *flagMemProfile != "" {
+		f, err := os.Create(*flagMemProfile)
+		if err != nil {
+			failf("could not create memory profile: ", err)
+		}
+		runtime.GC() // get up-to-date statistics
+		if err := pprof.WriteHeapProfile(f); err != nil {
+			failf("could not write memory profile: ", err)
+		}
+		f.Close()
+	}
 }
 
 func readConsts(arch string) map[string]uint64 {
@@ -147,7 +165,7 @@ func generate(arch string, desc *Description, consts map[string]uint64, out io.W
 	generateResources(desc, consts, out)
 	generateStructs(desc, consts, out)
 
-	fmt.Fprintf(out, "func initCalls() {\n")
+	fmt.Fprintf(out, "var Calls = []*Call{\n")
 	for _, s := range desc.Syscalls {
 		logf(4, "    generate population code for %v", s.Name)
 		skipCurrentSyscall = ""
@@ -160,7 +178,11 @@ func generate(arch string, desc *Description, consts map[string]uint64, out io.W
 				logf(0, "unsupported syscall: %v", s.CallName)
 			}
 		}
-		fmt.Fprintf(out, "func() { Calls = append(Calls, &Call{Name: \"%v\", CallName: \"%v\"", s.Name, s.CallName)
+		native := true
+		if _, ok := syzkalls[s.CallName]; ok {
+			native = false
+		}
+		fmt.Fprintf(out, "&Call{Name: \"%v\", CallName: \"%v\", Native: %v", s.Name, s.CallName, native)
 		if len(s.Ret) != 0 {
 			fmt.Fprintf(out, ", Ret: ")
 			generateArg("", "ret", s.Ret[0], "out", s.Ret[1:], desc, consts, true, false, out)
@@ -177,7 +199,7 @@ func generate(arch string, desc *Description, consts map[string]uint64, out io.W
 			logf(0, "unsupported syscall: %v due to %v", s.Name, skipCurrentSyscall)
 			syscallNR = -1
 		}
-		fmt.Fprintf(out, "}, NR: %v})}()\n", syscallNR)
+		fmt.Fprintf(out, "}, NR: %v},\n", syscallNR)
 	}
 	fmt.Fprintf(out, "}\n\n")
 
@@ -201,7 +223,7 @@ func generateResources(desc *Description, consts map[string]uint64, out io.Write
 	}
 	sort.Sort(resArray)
 
-	fmt.Fprintf(out, "var Resources = map[string]*ResourceDesc{\n")
+	fmt.Fprintf(out, "var resourceArray = []*ResourceDesc{\n")
 	for _, res := range resArray {
 		underlying := ""
 		name := res.Name
@@ -230,7 +252,7 @@ func generateResources(desc *Description, consts map[string]uint64, out io.Write
 				res = desc.Resources[res.Base]
 			}
 		}
-		fmt.Fprintf(out, "\"%v\": &ResourceDesc{Name: \"%v\", Type: ", name, name)
+		fmt.Fprintf(out, "&ResourceDesc{Name: \"%v\", Type: ", name)
 		generateArg("", "resource-type", underlying, "inout", nil, desc, consts, true, true, out)
 		fmt.Fprintf(out, ", Kind: []string{")
 		for i, k := range kind {
@@ -260,7 +282,7 @@ type structKey struct {
 	dir   string
 }
 
-func generateStructEntry(str Struct, key structKey, out io.Writer) {
+func generateStructEntry(str *Struct, out io.Writer) {
 	typ := "StructType"
 	if str.IsUnion {
 		typ = "UnionType"
@@ -277,38 +299,31 @@ func generateStructEntry(str Struct, key structKey, out io.Writer) {
 	if str.Align != 0 {
 		align = fmt.Sprintf(", align: %v", str.Align)
 	}
-	fmt.Fprintf(out, "\"%v\": &%v{TypeCommon: TypeCommon{TypeName: \"%v\", FldName: \"%v\", ArgDir: %v, IsOptional: %v} %v %v %v},\n",
-		key, typ, key.name, key.field, fmtDir(key.dir), false, packed, align, varlen)
+	fmt.Fprintf(out, "&%v{TypeCommon: TypeCommon{TypeName: \"%v\", IsOptional: %v} %v %v %v},\n",
+		typ, str.Name, false, packed, align, varlen)
 }
 
-func generateStructFields(str Struct, key structKey, desc *Description, consts map[string]uint64, out io.Writer) {
-	typ := "StructType"
-	fields := "Fields"
-	if str.IsUnion {
-		typ = "UnionType"
-		fields = "Options"
-	}
-	fmt.Fprintf(out, "func() { s := Structs[\"%v\"].(*%v)\n", key, typ)
+func generateStructFields(str *Struct, key structKey, desc *Description, consts map[string]uint64, out io.Writer) {
+	fmt.Fprintf(out, "{structKey{\"%v\", \"%v\", %v}, []Type{\n", key.name, key.field, fmtDir(key.dir))
 	for _, a := range str.Flds {
-		fmt.Fprintf(out, "s.%v = append(s.%v, ", fields, fields)
 		generateArg(str.Name, a[0], a[1], key.dir, a[2:], desc, consts, false, true, out)
-		fmt.Fprintf(out, ")\n")
+		fmt.Fprintf(out, ",\n")
 	}
-	fmt.Fprintf(out, "}()\n")
+	fmt.Fprintf(out, "}},\n")
+
 }
 
 func generateStructs(desc *Description, consts map[string]uint64, out io.Writer) {
 	// Struct fields can refer to other structs. Go compiler won't like if
-	// we refer to Structs map during Structs map initialization. So we do
-	// it in 2 passes: on the first pass create types and assign them to
-	// the map, on the second pass fill in fields.
+	// we refer to Structs during Structs initialization. So we do
+	// it in 2 passes: on the first pass create struct types without fields,
+	// on the second pass we fill in fields.
 
 	// Since structs of the same type can be fields with different names
 	// of multiple other structs, we have an instance of those structs
-	// for each field indexed by the name of the parent struct and the
-	// field name.
+	// for each field indexed by the name of the parent struct, field name and dir.
 
-	structMap := make(map[structKey]Struct)
+	structMap := make(map[structKey]*Struct)
 	for _, str := range desc.Structs {
 		for _, dir := range []string{"in", "out", "inout"} {
 			structMap[structKey{str.Name, "", dir}] = str
@@ -322,15 +337,25 @@ func generateStructs(desc *Description, consts map[string]uint64, out io.Writer)
 		}
 	}
 
-	fmt.Fprintf(out, "var Structs = map[string]Type{\n")
-	for key, str := range structMap {
-		generateStructEntry(str, key, out)
+	fmt.Fprintf(out, "var structArray = []Type{\n")
+	sortedStructs := make([]*Struct, 0, len(desc.Structs))
+	for _, str := range desc.Structs {
+		sortedStructs = append(sortedStructs, str)
+	}
+	sort.Sort(structSorter(sortedStructs))
+	for _, str := range sortedStructs {
+		generateStructEntry(str, out)
 	}
 	fmt.Fprintf(out, "}\n")
 
-	fmt.Fprintf(out, "func initStructFields() {\n")
-	for key, str := range structMap {
-		generateStructFields(str, key, desc, consts, out)
+	fmt.Fprintf(out, "var structFields = []struct{key structKey; fields []Type}{")
+	sortedKeys := make([]structKey, 0, len(structMap))
+	for key := range structMap {
+		sortedKeys = append(sortedKeys, key)
+	}
+	sort.Sort(structKeySorter(sortedKeys))
+	for _, key := range sortedKeys {
+		generateStructFields(structMap[key], key, desc, consts, out)
 	}
 	fmt.Fprintf(out, "}\n")
 }
@@ -374,6 +399,7 @@ func generateArg(
 			break
 		}
 	}
+	fmtDir(dir) // Make sure that dir is "in", "out" or "inout"
 	common := func() string {
 		return fmt.Sprintf("TypeCommon: TypeCommon{TypeName: \"%v\", FldName: %v, ArgDir: %v, IsOptional: %v}", typ, name, fmtDir(dir), opt)
 	}
@@ -667,7 +693,6 @@ func generateArg(
 		dir = "in"
 		fmt.Fprintf(out, "&PtrType{%v, Type: %v}", common(), generateType(a[1], a[0], desc, consts))
 	default:
-		intRegExp := regexp.MustCompile("^int([0-9]+|ptr)(be)?(:[0-9]+)?$")
 		if intRegExp.MatchString(typ) {
 			canBeArg = true
 			size, bigEndian, bitfieldLen := decodeIntType(typ)
@@ -691,12 +716,12 @@ func generateArg(
 			if len(a) != 0 {
 				failf("struct '%v' has args", typ)
 			}
-			fmt.Fprintf(out, "Structs[\"%v\"]", structKey{typ, origName, dir})
+			fmt.Fprintf(out, "getStruct(structKey{\"%v\", \"%v\", %v})", typ, origName, fmtDir(dir))
 		} else if _, ok := desc.Resources[typ]; ok {
 			if len(a) != 0 {
 				failf("resource '%v' has args", typ)
 			}
-			fmt.Fprintf(out, "&ResourceType{%v, Desc: Resources[\"%v\"]}", common(), typ)
+			fmt.Fprintf(out, "&ResourceType{%v, Desc: resource(\"%v\")}", common(), typ)
 			return
 		} else {
 			failf("unknown arg type \"%v\" for %v", typ, name)
@@ -792,6 +817,9 @@ func writeSource(file string, data []byte) {
 		fmt.Printf("%s\n", data)
 		failf("failed to format output: %v", err)
 	}
+	if oldSrc, err := ioutil.ReadFile(file); err == nil && bytes.Equal(src, oldSrc) {
+		return
+	}
 	writeFile(file, src)
 }
 
@@ -820,6 +848,32 @@ type ResourceArray []Resource
 func (a ResourceArray) Len() int           { return len(a) }
 func (a ResourceArray) Less(i, j int) bool { return a[i].Name < a[j].Name }
 func (a ResourceArray) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+
+type structSorter []*Struct
+
+func (a structSorter) Len() int           { return len(a) }
+func (a structSorter) Less(i, j int) bool { return a[i].Name < a[j].Name }
+func (a structSorter) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+
+type structKeySorter []structKey
+
+func (a structKeySorter) Len() int { return len(a) }
+func (a structKeySorter) Less(i, j int) bool {
+	if a[i].name < a[j].name {
+		return true
+	}
+	if a[i].name > a[j].name {
+		return false
+	}
+	if a[i].field < a[j].field {
+		return true
+	}
+	if a[i].field > a[j].field {
+		return false
+	}
+	return a[i].dir < a[j].dir
+}
+func (a structKeySorter) Swap(i, j int) { a[i], a[j] = a[j], a[i] }
 
 func failf(msg string, args ...interface{}) {
 	fmt.Fprintf(os.Stderr, msg+"\n", args...)

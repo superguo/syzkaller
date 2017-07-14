@@ -155,6 +155,7 @@ func foreachSubargOffset(arg *Arg, f func(arg *Arg, offset uintptr)) {
 	rec = func(arg1 *Arg, offset uintptr) uintptr {
 		switch arg1.Kind {
 		case ArgGroup:
+			f(arg1, offset)
 			var totalSize uintptr
 			for _, arg2 := range arg1.Inner {
 				size := rec(arg2, offset)
@@ -167,6 +168,7 @@ func foreachSubargOffset(arg *Arg, f func(arg *Arg, offset uintptr)) {
 				panic(fmt.Sprintf("bad group arg size %v, should be <= %v for %+v", totalSize, arg1.Size(), arg1))
 			}
 		case ArgUnion:
+			f(arg1, offset)
 			size := rec(arg1.Option, offset)
 			offset += size
 			if size > arg1.Size() {
@@ -208,16 +210,27 @@ func sanitizeCall(c *Call) {
 		}
 	case "mknod", "mknodat":
 		mode := c.Args[1]
+		dev := c.Args[2]
 		if c.Meta.CallName == "mknodat" {
 			mode = c.Args[2]
+			dev = c.Args[3]
 		}
-		if mode.Kind != ArgConst {
+		if mode.Kind != ArgConst || dev.Kind != ArgConst {
 			panic("mknod mode is not const")
 		}
 		// Char and block devices read/write io ports, kernel memory and do other nasty things.
 		// TODO: not required if executor drops privileges.
-		if mode.Val != sys.S_IFREG && mode.Val != sys.S_IFIFO && mode.Val != sys.S_IFSOCK {
-			mode.Val = sys.S_IFIFO
+		switch mode.Val & (sys.S_IFREG | sys.S_IFCHR | sys.S_IFBLK | sys.S_IFIFO | sys.S_IFSOCK) {
+		case sys.S_IFREG, sys.S_IFIFO, sys.S_IFSOCK:
+		case sys.S_IFBLK:
+			if dev.Val>>8 == 7 {
+				break // loop
+			}
+			mode.Val &^= sys.S_IFBLK
+			mode.Val |= sys.S_IFREG
+		case sys.S_IFCHR:
+			mode.Val &^= sys.S_IFCHR
+			mode.Val |= sys.S_IFREG
 		}
 	case "syslog":
 		cmd := c.Args[0]
@@ -246,4 +259,30 @@ func sanitizeCall(c *Call) {
 			code.Val = 1
 		}
 	}
+}
+
+func RequiresBitmasks(p *Prog) bool {
+	result := false
+	for _, c := range p.Calls {
+		foreachArg(c, func(arg, _ *Arg, _ *[]*Arg) {
+			if arg.Kind == ArgConst {
+				if arg.Type.BitfieldOffset() != 0 || arg.Type.BitfieldLength() != 0 {
+					result = true
+				}
+			}
+		})
+	}
+	return result
+}
+
+func RequiresChecksums(p *Prog) bool {
+	result := false
+	for _, c := range p.Calls {
+		foreachArg(c, func(arg, _ *Arg, _ *[]*Arg) {
+			if _, ok := arg.Type.(*sys.CsumType); ok {
+				result = true
+			}
+		})
+	}
+	return result
 }

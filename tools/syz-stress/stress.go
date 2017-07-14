@@ -8,16 +8,15 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
-	"regexp"
 	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/google/syzkaller/db"
 	"github.com/google/syzkaller/host"
 	"github.com/google/syzkaller/ipc"
-	. "github.com/google/syzkaller/log"
+	"github.com/google/syzkaller/pkg/db"
+	. "github.com/google/syzkaller/pkg/log"
 	"github.com/google/syzkaller/prog"
 	"github.com/google/syzkaller/sys"
 )
@@ -29,8 +28,6 @@ var (
 	flagProcs    = flag.Int("procs", 2*runtime.NumCPU(), "number of parallel processes")
 	flagLogProg  = flag.Bool("logprog", false, "print programs before execution")
 	flagGenerate = flag.Bool("generate", true, "generate new programs, otherwise only mutate corpus")
-
-	failedRe = regexp.MustCompile("runtime error: |panic: |Panic: ")
 
 	statExec uint64
 	gate     *ipc.Gate
@@ -50,7 +47,7 @@ func main() {
 	prios := prog.CalculatePriorities(corpus)
 	ct := prog.BuildChoiceTable(prios, calls)
 
-	flags, timeout, err := ipc.DefaultFlags()
+	config, err := ipc.DefaultConfig()
 	if err != nil {
 		Fatalf("%v", err)
 	}
@@ -58,7 +55,7 @@ func main() {
 	for pid := 0; pid < *flagProcs; pid++ {
 		pid := pid
 		go func() {
-			env, err := ipc.MakeEnv(*flagExecutor, timeout, flags, pid)
+			env, err := ipc.MakeEnv(*flagExecutor, pid, config)
 			if err != nil {
 				Fatalf("failed to create execution environment: %v", err)
 			}
@@ -100,16 +97,15 @@ func execute(pid int, env *ipc.Env, p *prog.Prog) {
 		fmt.Printf("executing program %v\n%s\n", pid, p.Serialize())
 		outMu.Unlock()
 	}
-
-	output, _, failed, hanged, err := env.Exec(p, false, false)
+	opts := &ipc.ExecOpts{}
+	output, _, failed, hanged, err := env.Exec(opts, p)
 	if err != nil {
 		fmt.Printf("failed to execute executor: %v\n", err)
 	}
-	paniced := failedRe.Match(output)
-	if failed || hanged || paniced || err != nil {
+	if failed || hanged || err != nil {
 		fmt.Printf("PROGRAM:\n%s\n", p.Serialize())
 	}
-	if failed || hanged || paniced || err != nil || *flagOutput {
+	if failed || hanged || err != nil || *flagOutput {
 		os.Stdout.Write(output)
 	}
 }

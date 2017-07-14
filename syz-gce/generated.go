@@ -267,6 +267,7 @@ CONFIG_X86_INTEL_MEMORY_PROTECTION_KEYS=y
 CONFIG_NET_KEY=y
 CONFIG_NET_KEY_MIGRATE=y
 CONFIG_IP_DCCP=y
+CONFIG_IP_DCCP_CCID3=y
 CONFIG_IP_SCTP=y
 CONFIG_RDS=y
 CONFIG_RDS_TCP=y
@@ -283,6 +284,18 @@ CONFIG_FUSE_FS=y
 CONFIG_CUSE=y
 CONFIG_OVERLAY_FS=y
 CONFIG_HARDENED_USERCOPY=y
+CONFIG_ATM=y
+CONFIG_ATM_CLIP=y
+CONFIG_ATM_LANE=y
+CONFIG_ATM_MPOA=y
+CONFIG_ATM_BR2684=y
+CONFIG_ATM_DRIVERS=y
+CONFIG_ATM_TCP=y
+CONFIG_USB_ATM=y
+CONFIG_LLC=y
+CONFIG_LLC2=y
+CONFIG_TIPC=y
+CONFIG_TIPC_MEDIA_UDP=y
 `
 
 const createImageScript = `#!/bin/bash
@@ -321,7 +334,7 @@ sudo cp -a $1/. disk.mnt/.
 sudo cp $2 disk.mnt/vmlinuz
 sudo sed -i "/^root/ { s/:x:/::/ }" disk.mnt/etc/passwd
 echo "T0:23:respawn:/sbin/getty -L ttyS0 115200 vt100" | sudo tee -a disk.mnt/etc/inittab
-echo -en "\nauto eth0\niface eth0 inet dhcp\n" | sudo tee -a disk.mnt/etc/network/interfaces
+echo -en "auto lo\niface lo inet loopback\nauto eth0\niface eth0 inet dhcp\n" | sudo tee disk.mnt/etc/network/interfaces
 echo "debugfs /sys/kernel/debug debugfs defaults 0 0" | sudo tee -a disk.mnt/etc/fstab
 echo "kernel.printk = 7 4 1 3" | sudo tee -a disk.mnt/etc/sysctl.conf
 echo "debug.exception-trace = 0" | sudo tee -a disk.mnt/etc/sysctl.conf
@@ -365,4 +378,3 @@ echo -n "$4" > tag
 tar -czvf image.tar.gz disk.tar.gz key tag obj/vmlinux
 rm -rf tag obj
 `
-
