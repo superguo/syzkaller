@@ -20,6 +20,7 @@ import (
 	"github.com/google/syzkaller/vm/vmimpl"
 
 	_ "github.com/google/syzkaller/vm/adb"
+	_ "github.com/google/syzkaller/vm/adbemu"
 	_ "github.com/google/syzkaller/vm/gce"
 	_ "github.com/google/syzkaller/vm/kvm"
 	_ "github.com/google/syzkaller/vm/odroid"
